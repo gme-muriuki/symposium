@@ -3,17 +3,19 @@
 //! Skills follow the [agentskills.io](https://agentskills.io/specification.md) format
 //! and live inside plugin directories under `skills/*/SKILL.md`.
 
-use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
+use symposium_sdk::workspace::WorkspaceCrate;
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
 use crate::pm::PackageManager as _;
 use crate::predicate::{self, PredicateContext, PredicateSet};
-
 fn source_display(source: &PluginSource) -> String {
     match source {
         PluginSource::Path(p) => format!("path:{}", p.display()),
@@ -88,41 +90,155 @@ pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
 ///
 /// The plugin-, group-, and skill-level predicate sets are all evaluated during
 /// collection; only skills whose every level holds end up here.
+#[derive(Debug)]
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
     pub origin_hash: String,
+    /// `None` for a standalone SKILL.md that no plugin vends.
+    pub plugin: Option<String>,
+    /// Unioned across the plugin, group, and skill predicate levels; empty for wildcard / non-crate gates.
+    pub crates: Vec<String>,
 }
 
-/// Resolve all applicable skills from the registry.
-///
-/// Resolve all skills applicable to the given crates.
-///
-/// `for_crates` is the set of crate name/version pairs to match against.
-/// For `crate --list`, this is the full workspace deps.
-/// For `crate <name>`, this is a single-element slice with the resolved crate.
-pub async fn skills_applicable_to(
+impl SkillWithGroupContext {
+    /// Project to the lean [`SkillActivation`] kept in a sync summary.
+    pub fn activation(&self) -> SkillActivation {
+        SkillActivation {
+            name: self.skill.name().to_string(),
+            plugin: self.plugin.clone(),
+            crates: self.crates.clone(),
+        }
+    }
+}
+
+/// A plugin that matched the workspace during resolution.
+#[derive(Debug, Clone)]
+pub struct PluginActivation {
+    pub name: String,
+    pub crates: Vec<String>,
+}
+
+/// A matched skill projected for a sync summary: name, owning plugin, and the
+/// crates that activated it.
+#[derive(Debug, Clone)]
+pub struct SkillActivation {
+    pub name: String,
+    /// `None` for a standalone SKILL.md that no plugin vends.
+    pub plugin: Option<String>,
+    pub crates: Vec<String>,
+}
+
+/// The applicable skills plus the plugins that matched. Plugins are tracked separately
+/// because one can match the workspace yet vend no applicable skill, and that match
+/// still needs recording.
+#[derive(Debug)]
+pub struct ApplicableSkills {
+    pub skills: Vec<SkillWithGroupContext>,
+    pub plugins: Vec<PluginActivation>,
+}
+
+/// Resolve every skill applicable to `workspace_crates`, together with the
+/// plugins that matched (a plugin can match yet vend no skill).
+pub async fn resolve_applicable(
     sym: &Symposium,
     registry: &PluginRegistry,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    workspace_crates: &[WorkspaceCrate],
     custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
     update: UpdateLevel,
-) -> Vec<SkillWithGroupContext> {
-    let mut results = Vec::new();
-
+) -> ApplicableSkills {
     let for_crates = crate::pm::CargoPm.list_deps(workspace_crates);
-    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
+    let dep_names = for_crates.iter().map(|id| id.name.as_str()).collect();
+    let mut resolver = Resolver {
+        sym,
+        workspace_crates,
+        update,
+        ctx: PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries),
+        dep_names,
+        skills: Vec::new(),
+        plugins: Vec::new(),
+    };
+    resolver.resolve(registry).await;
+    ApplicableSkills {
+        skills: resolver.skills,
+        plugins: dedup_plugins(resolver.plugins),
+    }
+}
 
-    // Skills from plugin manifests. We iterate these separately
-    // because we lazily load skill groups, so there
-    // is extra logic.
-    for parsed in &registry.plugins {
+/// Collapse plugin activations to one per name. A crate chained from two
+/// top-level plugins is walked once per owner (`visited` is per-plugin), so its
+/// activation is recorded each time; merge those into a single record whose
+/// crates are the union.
+fn dedup_plugins(plugins: Vec<PluginActivation>) -> Vec<PluginActivation> {
+    let mut merged: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for activation in plugins {
+        merged
+            .entry(activation.name)
+            .or_default()
+            .extend(activation.crates);
+    }
+    merged
+        .into_iter()
+        .map(|(name, crates)| PluginActivation {
+            name,
+            crates: crates.into_iter().collect(),
+        })
+        .collect()
+}
+
+/// One `resolve_applicable` pass: the shared inputs and predicate cursor plus
+/// the growing activation lists. Bundling them keeps the recursive
+/// chained-plugin walk from threading a long argument list.
+struct Resolver<'a> {
+    sym: &'a Symposium,
+    workspace_crates: &'a [WorkspaceCrate],
+    update: UpdateLevel,
+    ctx: PredicateContext<'a>,
+    /// Workspace dependency names, deduped up front so `matched_names` is a set
+    /// lookup rather than a scan of `ctx.deps` per referenced crate.
+    dep_names: HashSet<&'a str>,
+    skills: Vec<SkillWithGroupContext>,
+    plugins: Vec<PluginActivation>,
+}
+
+impl Resolver<'_> {
+    /// Walk the registry: each plugin's own groups and chained crates, then the
+    /// standalone skills that no plugin vends.
+    async fn resolve(&mut self, registry: &PluginRegistry) {
+        for parsed in &registry.plugins {
+            self.visit_plugin(parsed).await;
+        }
+
+        if !registry.standalone_skills.is_empty() {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::PluginConsidered {
+                    plugin: "(standalone skills)".into(),
+                    matched: true,
+                    reason: None,
+                },
+            );
+        }
+        // Standalone skills have no defining plugin, so they never count as
+        // workspace members: clear any stamp left by the plugin walk.
+        self.ctx.set_workspace_member(false);
+        for entry in &registry.standalone_skills {
+            self.collect_skill(
+                entry.skill.clone(),
+                entry.origin_hash.clone(),
+                None,
+                &BTreeSet::new(),
+            );
+        }
+    }
+
+    /// Gate a top-level plugin; if it holds, record it and collect its own skill
+    /// groups and `[[plugins]]` chained references.
+    async fn visit_plugin(&mut self, parsed: &ParsedPlugin) {
         let plugin = &parsed.plugin;
-        // Plugin-level predicates gate everything below. Evaluated before
-        // group fetching to avoid wasted work. Goes through the ParsedPlugin
-        // so the plugin's provenance is stamped for `workspace-member()`.
-        if !parsed.applies(&mut ctx) {
+        // `applies` stamps the plugin's provenance for `workspace-member()`; the
+        // stamp carries to the groups and skills gated below.
+        if !parsed.applies(&mut self.ctx) {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -130,9 +246,8 @@ pub async fn skills_applicable_to(
                     reason: Some("plugin-level predicates not satisfied".into()),
                 },
             );
-            continue;
+            return;
         }
-
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {
                 plugin: plugin.name.clone(),
@@ -141,64 +256,173 @@ pub async fn skills_applicable_to(
             },
         );
 
-        for group in &plugin.skills {
-            let skills = load_skills_for_group(sym, parsed, group, &mut ctx, update).await;
-            for (skill, origin_hash) in skills {
-                collect_skill_applicable_to(
-                    skill,
-                    origin_hash,
-                    &plugin.name,
-                    &mut ctx,
-                    &mut results,
-                );
-            }
-        }
+        let plugin_crates = self.matched_names(&plugin.predicates);
+        self.plugins.push(PluginActivation {
+            name: plugin.name.clone(),
+            crates: plugin_crates.iter().cloned().collect(),
+        });
+        self.collect_groups(parsed, &plugin_crates).await;
 
-        // `[[plugins]]` chained references: whenever this plugin is active and
-        // an edge's own predicates hold, the referenced crate is loaded as a
-        // first-class plugin and its skills contributed. Expansion recurses
-        // into the loaded crate's own chained edges — a crate that names
-        // another crate (the reschema'd `[package.metadata.symposium]`
-        // redirect) is followed transitively — with per-plugin cycle detection.
-        let mut visited = std::collections::HashSet::new();
-        expand_chained_plugins(
-            sym,
-            parsed,
-            workspace_crates,
-            &mut ctx,
-            update,
-            &mut visited,
-            0,
-            &mut results,
-        )
-        .await;
+        let mut visited = HashSet::new();
+        self.expand_chained(parsed, &plugin_crates, &mut visited, 0)
+            .await;
     }
 
-    // Standalone skills already carry their own origin hash (computed
-    // from the SKILL.md's on-disk path, like every other skill).
-    if !registry.standalone_skills.is_empty() {
+    /// Load and collect the skills of `parsed`'s own groups, attributing each to
+    /// `parsed` with the plugin-and-group crates.
+    async fn collect_groups(&mut self, parsed: &ParsedPlugin, plugin_crates: &BTreeSet<String>) {
+        for group in &parsed.plugin.skills {
+            let skills =
+                load_skills_for_group(self.sym, parsed, group, &mut self.ctx, self.update).await;
+            let mut inherited = plugin_crates.clone();
+            inherited.extend(self.matched_names(&group.predicates));
+            for (skill, origin_hash) in skills {
+                self.collect_skill(skill, origin_hash, Some(&parsed.plugin.name), &inherited);
+            }
+        }
+    }
+
+    /// Expand `owner`'s chained references, recursively. For each edge whose
+    /// predicates hold, the named crate loads as a first-class plugin (its own
+    /// gate honored), its skills are collected, and its own chained edges are
+    /// expanded in turn. `visited` (normalized crate names) collapses diamonds
+    /// and breaks cycles; `depth`/[`MAX_CHAIN_DEPTH`] is a backstop.
+    async fn expand_chained(
+        &mut self,
+        owner: &ParsedPlugin,
+        inherited: &BTreeSet<String>,
+        visited: &mut HashSet<String>,
+        depth: usize,
+    ) {
+        if depth >= MAX_CHAIN_DEPTH {
+            tracing::warn!(
+                plugin = %owner.plugin.name,
+                "chained plugin expansion exceeded depth limit ({MAX_CHAIN_DEPTH}); stopping"
+            );
+            return;
+        }
+
+        for chained in &owner.plugin.chained {
+            // Edge predicates evaluate against the owning plugin's provenance;
+            // the crate plugin restamps its own below, so reset before the gate.
+            self.ctx.set_workspace_member(owner.workspace_member);
+            if !chained.predicates.evaluate(&mut self.ctx) {
+                continue;
+            }
+
+            let Some(crate_plugin) = crate::pm::CargoPm
+                .load_plugin(&chained.name, self.workspace_crates)
+                .await
+            else {
+                continue;
+            };
+
+            // Cycle / diamond detection on the resolved crate identity,
+            // normalized so hyphen/underscore spellings collapse.
+            let key = crate::crate_sources::normalize_crate_name(&crate_plugin.canonical.name);
+            if !visited.insert(key) {
+                tracing::debug!(
+                    crate_name = %chained.name,
+                    "chained plugin already loaded on this chain; skipping (cycle or diamond)"
+                );
+                continue;
+            }
+
+            // Honor the crate plugin's own gate (which stamps its provenance:
+            // never a workspace member) before touching it.
+            if !crate_plugin.applies(&mut self.ctx) {
+                continue;
+            }
+            warn_undispatched_crate_features(&crate_plugin);
+
+            // The crate plugin's crates: the owner chain, the edge, and its gate.
+            let mut plugin_crates = inherited.clone();
+            plugin_crates.extend(self.matched_names(&chained.predicates));
+            plugin_crates.extend(self.matched_names(&crate_plugin.plugin.predicates));
+            self.plugins.push(PluginActivation {
+                name: crate_plugin.plugin.name.clone(),
+                crates: plugin_crates.iter().cloned().collect(),
+            });
+
+            self.collect_groups(&crate_plugin, &plugin_crates).await;
+
+            Box::pin(self.expand_chained(&crate_plugin, &plugin_crates, visited, depth + 1)).await;
+        }
+    }
+
+    /// Evaluate a skill's own gate and, if it holds, record it with its owning
+    /// plugin and the union of the inherited and skill-level crates.
+    fn collect_skill(
+        &mut self,
+        skill: Skill,
+        origin_hash: String,
+        plugin: Option<&str>,
+        inherited: &BTreeSet<String>,
+    ) {
+        // `SkillConsidered` has no pluginless variant; standalone skills log here.
+        let plugin_label = plugin.unwrap_or("(standalone skills)");
+        if !skill.predicates.evaluate(&mut self.ctx) {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::SkillConsidered {
+                    skill: skill.name().to_string(),
+                    plugin: plugin_label.to_string(),
+                    matched: false,
+                    reason: Some("skill-level predicates not satisfied".into()),
+                },
+            );
+            return;
+        }
         tracing::debug!(
-            report = %crate::report::ReportEvent::PluginConsidered {
-                plugin: "(standalone skills)".into(),
+            report = %crate::report::ReportEvent::SkillConsidered {
+                skill: skill.name().to_string(),
+                plugin: plugin_label.to_string(),
                 matched: true,
                 reason: None,
             },
         );
-    }
-    // Standalone skills have no defining plugin; they never count as
-    // workspace members (clear any stamp left by the plugin loop).
-    ctx.set_workspace_member(false);
-    for entry in &registry.standalone_skills {
-        collect_skill_applicable_to(
-            entry.skill.clone(),
-            entry.origin_hash.clone(),
-            "(standalone skills)",
-            &mut ctx,
-            &mut results,
-        );
+
+        let mut crates = inherited.clone();
+        crates.extend(self.matched_names(&skill.predicates));
+        self.skills.push(SkillWithGroupContext {
+            skill,
+            origin_hash,
+            plugin: plugin.map(str::to_string),
+            crates: crates.into_iter().collect(),
+        });
     }
 
-    results
+    /// Workspace crates a gate names *and* the workspace has: its referenced
+    /// dependency names (via [`PredicateSet::collect_dep_names`]) intersected
+    /// with the live deps. The coarse alternative to a predicate witness — it
+    /// over-reports only a satisfied `any(...)`'s non-firing branch, acceptable
+    /// for this names-only, privacy-bounded attribution.
+    fn matched_names(&self, gate: &PredicateSet) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        gate.collect_dep_names(&mut names);
+        names.retain(|name| self.dep_names.contains(name.as_str()));
+        names
+    }
+}
+
+/// Skills-only view of [`resolve_applicable`], used by tests that don't need
+/// the matched-plugin list.
+#[cfg(test)]
+pub async fn skills_applicable_to(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    workspace_crates: &[WorkspaceCrate],
+    custom_predicate_entries: HashMap<String, predicate::ResolvedPredicateEntry>,
+    update: UpdateLevel,
+) -> Vec<SkillWithGroupContext> {
+    resolve_applicable(
+        sym,
+        registry,
+        workspace_crates,
+        custom_predicate_entries,
+        update,
+    )
+    .await
+    .skills
 }
 
 /// Discover and load skills for a group, applying pre-fetch filtering.
@@ -266,7 +490,7 @@ async fn load_skills_for_group(
 /// skills discovered inside it. Both `source` variants reduce to this: `Path` is
 /// already on disk; `Git` is fetched via the git cache. (A crate is not a group
 /// source — it becomes a plugin through a `[[plugins]]` chained reference; see
-/// [`expand_chained_plugins`].)
+/// [`Resolver::expand_chained`].)
 struct ResolvedSkillDir {
     dir: PathBuf,
     /// `SkillSourceSearched` report `plugin` label.
@@ -352,102 +576,6 @@ fn warn_undispatched_crate_features(parsed: &ParsedPlugin) {
             "crate-embedded plugin declares extension types that are not yet dispatched \
              (only its skills and chained references are loaded today)"
         );
-    }
-}
-
-/// Expand an active plugin's `[[plugins]]` chained references, recursively.
-///
-/// For each edge whose predicates hold (evaluated against the *owning* plugin's
-/// provenance), the referenced crate is loaded as a first-class plugin via
-/// [`CargoPm::load_plugin`], its own plugin-level predicates are honored, and
-/// its skills are contributed with crate-origin identity. The loaded
-/// crate's own chained edges are then expanded in turn — this is how a crate
-/// that names another crate (a reschema'd `[package.metadata.symposium]`
-/// redirect) is followed.
-///
-/// `visited` holds the normalized crate names already loaded on this owning
-/// plugin's chain; it collapses diamonds (a crate reached two ways loads once)
-/// and breaks cycles. It is scoped per top-level plugin — cross-plugin dedup
-/// stays the sync layer's job (via the origin hash). `depth`/[`MAX_CHAIN_DEPTH`]
-/// is a backstop.
-#[allow(clippy::too_many_arguments)]
-async fn expand_chained_plugins(
-    sym: &Symposium,
-    owner: &ParsedPlugin,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
-    ctx: &mut PredicateContext<'_>,
-    update: UpdateLevel,
-    visited: &mut std::collections::HashSet<String>,
-    depth: usize,
-    results: &mut Vec<SkillWithGroupContext>,
-) {
-    if depth >= MAX_CHAIN_DEPTH {
-        tracing::warn!(
-            plugin = %owner.plugin.name,
-            "chained plugin expansion exceeded depth limit ({MAX_CHAIN_DEPTH}); stopping"
-        );
-        return;
-    }
-
-    for chained in &owner.plugin.chained {
-        // Edge predicates evaluate against the owning plugin's provenance; the
-        // crate plugin's own `applies` (below) restamps its own — never a
-        // workspace member — so reset before each edge's gate.
-        ctx.set_workspace_member(owner.workspace_member);
-        if !chained.predicates.evaluate(ctx) {
-            continue;
-        }
-
-        let Some(crate_plugin) = crate::pm::CargoPm
-            .load_plugin(&chained.name, workspace_crates)
-            .await
-        else {
-            continue;
-        };
-
-        // Cycle / diamond detection on the resolved crate identity, normalized
-        // so hyphen/underscore spellings of one crate collapse.
-        let key = crate::crate_sources::normalize_crate_name(&crate_plugin.canonical.name);
-        if !visited.insert(key) {
-            tracing::debug!(
-                crate_name = %chained.name,
-                "chained plugin already loaded on this chain; skipping (cycle or diamond)"
-            );
-            continue;
-        }
-
-        // Honor the crate plugin's own plugin-level predicates (which stamp its
-        // provenance: never a workspace member) before doing anything with it —
-        // an inactive crate plugin shouldn't warn about undispatched features.
-        if !crate_plugin.applies(ctx) {
-            continue;
-        }
-        warn_undispatched_crate_features(&crate_plugin);
-
-        for group in &crate_plugin.plugin.skills {
-            let skills = load_skills_for_group(sym, &crate_plugin, group, ctx, update).await;
-            for (skill, origin_hash) in skills {
-                collect_skill_applicable_to(
-                    skill,
-                    origin_hash,
-                    &crate_plugin.plugin.name,
-                    ctx,
-                    results,
-                );
-            }
-        }
-
-        Box::pin(expand_chained_plugins(
-            sym,
-            &crate_plugin,
-            workspace_crates,
-            ctx,
-            update,
-            visited,
-            depth + 1,
-            results,
-        ))
-        .await;
     }
 }
 
@@ -701,40 +829,6 @@ fn load_skill(
     };
     tracing::debug!(name = %skill.name(), path = %skill_md_path.display(), "skill loaded");
     Ok(skill)
-}
-
-/// Evaluate the skill-level predicate set and collect the skill if it holds.
-///
-/// Plugin- and group-level predicates have already been evaluated by callers as
-/// a pre-filter, so only the skill-level set is checked here.
-fn collect_skill_applicable_to(
-    skill: Skill,
-    origin_hash: String,
-    plugin_name: &str,
-    ctx: &mut PredicateContext,
-    results: &mut Vec<SkillWithGroupContext>,
-) {
-    if !skill.predicates.evaluate(ctx) {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::SkillConsidered {
-                skill: skill.name().to_string(),
-                plugin: plugin_name.to_string(),
-                matched: false,
-                reason: Some("skill-level predicates not satisfied".into()),
-            },
-        );
-        return;
-    }
-
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillConsidered {
-            skill: skill.name().to_string(),
-            plugin: plugin_name.to_string(),
-            matched: true,
-            reason: None,
-        },
-    );
-    results.push(SkillWithGroupContext { skill, origin_hash });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -1424,6 +1518,119 @@ mod tests {
             "Should find one skill when all levels match"
         );
         assert_eq!(skills[0].skill.name(), "serde-basics");
+    }
+
+    #[tokio::test]
+    async fn resolve_applicable_attributes_crates_to_plugin_and_skill() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // A wildcard skill: it names no dependency of its own, so it can only
+        // "ride in" on the plugin's `depends-on(acme-core)` gate.
+        let skill_dir = tmp.path().join("acme-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: acme-basics
+                description: Basic acme usage
+                depends-on: '*'
+                ---
+
+                Use the derive macros.
+            "},
+        )
+        .unwrap();
+
+        // Plugin gated on a concrete crate; the group is a wildcard.
+        let plugin = Plugin {
+            name: "acme-plugin".to_string(),
+            predicates: pred_set("acme-core"),
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                predicates: pred_set("*"),
+                source: PluginSource::Path(skill_dir.to_path_buf()),
+                workspace_member: false,
+            }],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+            chained: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+                source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "acme-core".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
+
+        let applicable = resolve_applicable(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+            UpdateLevel::None,
+        )
+        .await;
+
+        // The plugin matched, attributed to the crate that satisfied its gate.
+        assert_eq!(applicable.plugins.len(), 1);
+        assert_eq!(applicable.plugins[0].name, "acme-plugin");
+        assert_eq!(applicable.plugins[0].crates, vec!["acme-core".to_string()]);
+
+        // The wildcard skill rode in on the plugin: its own gate names no
+        // dependency, so the crate union is exactly the plugin's `[acme-core]`.
+        assert_eq!(applicable.skills.len(), 1);
+        let skill = &applicable.skills[0];
+        assert_eq!(skill.skill.name(), "acme-basics");
+        assert_eq!(skill.plugin.as_deref(), Some("acme-plugin"));
+        assert_eq!(skill.crates, vec!["acme-core".to_string()]);
+    }
+
+    #[test]
+    fn dedup_plugins_merges_by_name_unioning_crates() {
+        // Same plugin recorded twice (e.g. a crate chained from two owners),
+        // plus a distinct crate-less one.
+        let plugins = vec![
+            PluginActivation {
+                name: "shared".into(),
+                crates: vec!["a".into()],
+            },
+            PluginActivation {
+                name: "shared".into(),
+                crates: vec!["b".into(), "a".into()],
+            },
+            PluginActivation {
+                name: "solo".into(),
+                crates: vec![],
+            },
+        ];
+        let merged = dedup_plugins(plugins);
+        assert_eq!(merged.len(), 2);
+        // Sorted by name; crates unioned and sorted.
+        assert_eq!(merged[0].name, "shared");
+        assert_eq!(merged[0].crates, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(merged[1].name, "solo");
+        assert!(merged[1].crates.is_empty());
     }
 
     #[tokio::test]

@@ -422,7 +422,7 @@ pub struct ParsedPlugin {
     /// name (registry) or `"local"` (workspace).
     ///
     /// Used only to key chained-plugin cycle/diamond detection on the normalized
-    /// crate name (see `skills::expand_chained_plugins`). It does *not* affect
+    /// crate name (see `skills::Resolver::expand_chained`). It does *not* affect
     /// skill identity — that is the `SKILL.md` path hash.
     ///
     /// FIXME: the registry/workspace placeholder `pm` tags (`"user-plugins"`,
@@ -472,7 +472,7 @@ pub struct Plugin {
     pub custom_predicates: Vec<CustomPredicate>,
     /// Chained plugin references (`[[plugins]]`): whenever this plugin is
     /// active and any per-edge predicates hold, the referenced plugin loads
-    /// too. Expanded during skill resolution by `skills::expand_chained_plugins`.
+    /// too. Expanded during skill resolution by `skills::Resolver::expand_chained`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chained: Vec<ChainedPlugin>,
 }

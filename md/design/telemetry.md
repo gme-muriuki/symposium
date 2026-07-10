@@ -50,7 +50,7 @@ The event kinds fall into three groups by what produces them:
   only), and `stop` (end of a turn).
 - **Sync activity**, captured once per session when symposium syncs skills:
   `plugin_activation` and `skill_activation` (which plugin or skill applied, and
-  the witness crates that triggered it), plus `sync_run` (skills installed and
+  the workspace crates that triggered it), plus `sync_run` (skills installed and
   reaped, plugins matched).
 - **Hook activity**: `hook_invocation` (which hook of which plugin ran, and its
   duration).
