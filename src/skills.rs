@@ -393,7 +393,7 @@ impl Resolver<'_> {
 
     /// Workspace crates a gate names *and* the workspace has: its referenced
     /// dependency names (via [`PredicateSet::collect_dep_names`]) intersected
-    /// with the live deps. The coarse alternative to a predicate witness — it
+    /// with the live deps. The coarse alternative to a predicate witness: it
     /// over-reports only a satisfied `any(...)`'s non-firing branch, acceptable
     /// for this names-only, privacy-bounded attribution.
     fn matched_names(&self, gate: &PredicateSet) -> BTreeSet<String> {
