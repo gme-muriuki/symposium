@@ -35,11 +35,26 @@ Telemetry: enabled (consent version 1)
 
 Possible states are `disabled`, `consent required`, and `enabled`. `Consent required` means the config contains an earlier or unversioned opt-in; Symposium records nothing until you accept the current disclosure.
 
-Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, `state.toml`, and temporary files. Supported rows are lines the current binary recognizes by kind and schema version. Unknown and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets.
+Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version. Unknown and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets.
 
 ## `enable`
 
-`enable` presents the exact disclosure below. Interactive `cargo agents init` uses the same text. Both default to no.
+### Disclosure requirements
+
+Before asking for consent, the team-approved version 1 disclosure must make these points clear:
+
+- Telemetry is off by default, requires an explicit opt-in, and defaults to no in both interactive entry points.
+- Recorded categories include observed sessions and configured agents; Symposium version, agent labels, and platform classes; public package names and exact versions; public resolution relationships and aggregate sync results; exact daily hook, plugin-hook, and agent skill-activation metrics, with structured skill activation available only for Claude in version 1; completed eligible commands without arguments; and storage-limit markers.
+- Exact hook-surface counts can approximate daily prompt/tool activity. The disclosure distinguishes second-precision session/command timestamps from day-only aggregate and resolution rows.
+- Purpose-scoped pseudonymous identifiers permit the stated links for up to 30 days, including one D0-D30 observed-session cohort across agents; they are not anonymous or a global project/workspace identity.
+- The main exclusions are stated plainly, including prompt/tool content, paths, project/workspace identity, environment and machine identity, raw errors and agent/package-manager payloads, private package/plugin/skill names, and individual hook or skill-invocation rows.
+- Recorded data and private identifier/counting state remain local in their stated locations, nothing is uploaded, data remains through D30 and is eligible for deletion on D31, and the disclosure names the inspection and deletion commands.
+
+The [exhaustive field list](./proposed-data-collected.md) and [never-record list](./proposed-data-collected.md#what-is-never-recorded) define the details behind these requirements. The team may revise structure, tone, and wording before implementation, provided the final disclosure preserves every required point and its meaning. `cargo agents init` and `cargo agents telemetry enable` must use the same approved text and both default to no.
+
+### Example version 1 disclosure
+
+The following non-normative example demonstrates complete coverage. It is a review aid and starting point for the final product copy, not the string the implementation must reproduce.
 
 ```text
 Symposium telemetry is off by default. If enabled, Symposium records:
@@ -61,22 +76,26 @@ Symposium telemetry is off by default. If enabled, Symposium records:
 Counts for pre-tool-use, post-tool-use, and user-prompt-submit approximate daily
 tool and prompt activity. Session starts and commands include UTC timestamps
 truncated to one second; other rows include only the UTC day.
+Pseudonymous does not mean anonymous: the scoped identifiers permit only the
+links described above, and no identifier links all telemetry or identifies a
+project or workspace.
 
 Symposium never records prompt or tool content, tool names or arguments, file
 paths, project or workspace identity, environment values, hostname, username,
-model/account/vendor identifiers, raw errors, private package, plugin, or skill
-names, raw agent-facing skill identifiers, individual hook-invocation rows, or
-individual skill-invocation rows.
+model/account/vendor identifiers, raw errors or agent/package-manager payloads,
+private package, plugin, or skill names, raw agent-facing skill identifiers,
+individual hook-invocation rows, or individual skill-invocation rows.
 
-Data stays on this machine in ~/.symposium/telemetry/. Nothing is uploaded.
+Recorded data stays on this machine in ~/.symposium/telemetry/. A private
+identifier key and bounded counting state stay in
+~/.symposium/telemetry-state.toml; telemetry commands never print them.
+Nothing is uploaded.
 Files remain through day 30 and become eligible for deletion on day 31. Inspect
 them with cargo agents telemetry show and delete them with
 cargo agents telemetry clear.
 
 Enable telemetry under consent version 1? [y/N]
 ```
-
-The [exhaustive field list](./proposed-data-collected.md) and [never-record list](./proposed-data-collected.md#what-is-never-recorded) define the corresponding producer contract.
 
 In a non-interactive environment, `enable` does not change config unless `--acknowledge` is supplied explicitly. This prevents scripts or a manually retained unversioned boolean from upgrading consent silently.
 
@@ -131,19 +150,22 @@ If no identity state exists, the command reports that there is nothing to reset 
 ## Files, concurrency, and expiry
 
 ```text
-~/.symposium/telemetry/
-|-- .lock
-|-- state.toml
-|-- metrics-2026-08-03.jsonl
-`-- events-2026-08-03.jsonl
+~/.symposium/
+|-- telemetry-state.toml
+`-- telemetry/
+    |-- .lock
+    |-- metrics-2026-08-03.jsonl
+    `-- events-2026-08-03.jsonl
 ```
 
 Each project skills parent may also contain a generated `.symposium/index-v1.json` installation index. It maps agent-facing skill identifiers to Symposium-managed installations so a later hook can attribute a skill activation. The index is gitignored installation state, not telemetry: `show`, `clear`, retention, and identifier reset do not read or delete it, and this RFD does not upload it.
 
-`state.toml` contains the secret identity key, rotation/cleanup state, and bounded keyed session sets plus contribution counts used for complete aggregate session counts. Do not publish it. The sets and contribution counts are never shown or copied into metric rows; they are discarded at day rollover or by `clear`/`reset-identifiers`. `show` reads event and aggregate-metric files only. `show` and `status` do not lock writers, so their multi-file view is not an atomic snapshot.
+`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window and return-cohort anchors, cleanup and marker metadata, and bounded keyed session sets plus contribution counts used for complete aggregate session counts. All recorders read this state under the telemetry lock. Normal 30-day rollover changes the window anchor without replacing the key; renewed consent or `reset-identifiers` replaces it, while `disable` and `clear` preserve it.
 
-Recorders make one non-waiting lock attempt. On contention they drop the entire event batch or aggregate observation rather than delay the agent or command. Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot by a same-directory temporary write and atomic replace; a crash leaves either the old or new complete snapshot, while abandoned temporary files are ignored and cleaned lazily. Session-count state is atomically replaced first and carries the snapshot contribution count; a mismatch after a failed snapshot write discards the sets and makes the row's session counts incomplete for that day. Management commands can wait for the lock. A crash can still lose the last batch or metric update, or leave a partial final event line; `status` reports that line as malformed and `show` preserves it.
+Symposium atomically creates and replaces the file with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock. `show`, `status`, data retention, and `clear` do not expose or delete the state file. `clear` atomically rewrites it only to remove pending sets, preserving the key and current anchors. The sets and contribution counts are never copied into metric rows and are discarded at day rollover or by `clear`/`reset-identifiers`. `show` and `status` do not lock writers, so their multi-file view is not an atomic snapshot.
+
+Recorders make one non-waiting attempt on the lock in the telemetry data directory; that lock guards both data and private state mutations. On contention they drop the entire event batch or aggregate observation rather than delay the agent or command. Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot by a same-directory temporary write and atomic replace; a crash leaves either the old or new complete snapshot, while abandoned temporary files are ignored and cleaned lazily. Session-count state is atomically replaced first and carries the snapshot contribution count; a mismatch after a failed snapshot write discards the sets and makes the row's session counts incomplete for that day. Management commands can wait for the lock. A crash can still lose the last batch or metric update, or leave a partial final event line; `status` reports that line as malformed and `show` preserves it.
 
 Hook and extension-invocation counts are lower bounds. There is no durable all-cause dropped-update counter because contention, termination, and I/O failure can also prevent writing that counter.
 
-Each UTC day's event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB allowance. Aggregate metrics may use at most 512 KiB; an aggregate update that would exceed that maximum or the remaining shared allowance is dropped without stopping low-volume event recording. Telemetry data files remain through D30 and become eligible for deletion on D31, when `current_utc_day - file_utc_day > 30`. Cleanup runs lazily, at most once per day, when a recording-capable or telemetry command next runs. Uninstalling Symposium does not delete these files.
+Each UTC day's event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB allowance. This is a safety ceiling, not expected volume or preallocation: it bounds damage from a producer bug or unexpectedly large resolution batch. Together with D31 expiry, it bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Aggregate metrics may use at most 512 KiB; an aggregate update that would exceed that maximum or the remaining shared allowance is dropped without stopping low-volume event recording. Telemetry data files remain through D30 and become eligible for deletion on D31, when `current_utc_day - file_utc_day > 30`. Cleanup runs lazily, at most once per day, when a recording-capable or telemetry command next runs. Uninstalling Symposium does not delete these files.

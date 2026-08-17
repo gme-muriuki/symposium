@@ -4,7 +4,7 @@
 
 - Replace the experimental event list with a question-driven, closed schema for local telemetry.
 - Keep recording off by default, per-user, local only, and gated by versioned consent. Existing unversioned opt-ins must consent again.
-- Record observed sessions, configured agents, public package/extension resolution, aggregate Claude skill invocation, aggregate hook reliability, command use, and known storage gaps.
+- Record observed sessions, configured agents, public package/extension resolution, aggregate agent skill invocation, aggregate hook reliability, command use, and known storage gaps.
 - Never record individual prompt/tool activity rows, prompt or tool details, paths, private names, dependency snapshots, or a global installation/workspace id.
 - Use purpose-scoped pseudonyms and non-waiting, best-effort recording. Telemetry failure must not disrupt hooks, sync, or commands.
 - Defer upload, server-side handling, and subjective feedback to separate follow-up efforts tracked under [#246](https://github.com/symposium-dev/symposium/issues/246).
@@ -13,15 +13,15 @@ Supporting pages: [data contract and exclusions](./proposed-data-collected.md), 
 
 ## Motivation
 
-Symposium has no production evidence about which integrations people reach, which public packages resolve to plugins and skills, whether Claude activates those skills, or whether hooks are slow or failing. The existing experimental telemetry was never wired into production and would record one row per prompt or tool call: high-volume activity that does not answer those questions.
+Symposium has no production evidence about which integrations people reach, which public packages resolve to plugins and skills, whether agents activate those skills, or whether hooks are slow or failing. The existing experimental telemetry was never wired into production and would record one row per prompt or tool call: high-volume activity that does not answer those questions.
 
 We need a low-volume, inspectable record of reach, resolution, actual skill activation, and reliability so the team can prioritize agent support, improve recommendations, and detect unacceptable hook cost. The schema must be agreed before collection begins so every field has a stated use and privacy boundary.
 
-This telemetry can show that a public skill resolved and Claude activated it. It cannot show that Claude followed the skill or that the skill improved the task outcome. Controlled evaluation and explicit feedback remain separate follow-up efforts tracked under [#246](https://github.com/symposium-dev/symposium/issues/246).
+This telemetry can show that a public skill resolved and an agent activated it. It cannot show that the agent followed the skill or that the skill improved the task outcome. Version 1 observes structured skill activation only for Claude, but the event model and attribution boundary are agent-neutral. Controlled evaluation and explicit feedback remain separate follow-up efforts tracked under [#246](https://github.com/symposium-dev/symposium/issues/246).
 
 ## Change in a nutshell
 
-Recording uses purpose-shaped JSONL. A full sync emits one summary plus safe package and extension relationships; hook and Claude skill observations update bounded daily snapshots:
+Recording uses purpose-shaped JSONL. A full sync emits one summary plus safe package and extension relationships; hook and agent skill observations update bounded daily snapshots:
 
 ```text
 observed session -> session_start
@@ -30,7 +30,7 @@ full sync        -> resolution_summary
                  -> extension_resolution*
 completed hook   -> hook_metrics snapshot
                  -> plugin_hook_metrics snapshot
-Claude Skill     -> extension_invocation_metrics snapshot
+agent skill use  -> extension_invocation_metrics snapshot
 command          -> command
 ```
 
@@ -45,25 +45,29 @@ The [exhaustive data contract](./proposed-data-collected.md) owns exact fields, 
 - Files remain through D30 and first become eligible for lazy deletion on D31.
 - Nothing is uploaded by this RFD.
 
+
+
 ## Detailed plans
+
+
 
 ### Measurement questions
 
-All measures describe opted-in installations, not the whole user population. Reports must state that selection bias.
+All measures describe opted-in installations, not the whole user population. Reports must state that selection bias. This RFD proposes the questions below to make the activity goals in [#246](https://github.com/symposium-dev/symposium/issues/246) and [#243](https://github.com/symposium-dev/symposium/issues/243) measurable.
 
 
 | #   | Question                                                            | Operational definition                                                                                                             |
 | --- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Q1  | Do opted-in installations return after first observed use?          | Deduplicate `session_start` by `retention_subject` and measure observed cohort days D1, D7, and D30.                               |
+| Q1  | Is another session observed after an installation's first session?  | Deduplicate `session_start` by `retention_subject` and measure observed cohort days D1, D7, and D30.                               |
 | Q2  | Which plugins and skills resolve?                                   | Count `extension_resolution` occurrences and scoped subjects by public extension and safe witnessed path.                          |
 | Q3  | Which public packages and versions occur, and what do they resolve? | Count `package_resolution` by public coordinate and `extension_match`; use paths carried by `extension_resolution`.                |
 | Q4  | Are Symposium and plugin hooks failing or slow?                     | Use daily invocation/attempt counters, outcomes, fixed latency histograms, and complete identified-session impact counts.          |
 | Q5  | Which agents, versions, and platforms have reach?                   | Keep configured-agent observations separate from observed hook sessions.                                                           |
 | Q6  | Which command surfaces are used?                                    | Count completed built-ins and eligible public plugin commands without arguments.                                                   |
-| Q7  | Which resolved public skills does Claude actually activate?         | Count completed `extension_invocation_metrics` and complete identified-session counts by public skill and safe resolution subject. |
+| Q7  | Which resolved public skills do agents actually activate?           | Count completed `extension_invocation_metrics` and complete identified-session counts by public skill and safe resolution subject. |
 
 
-Q1 measures continued installation, not continued value: session-start runs automatically once installed. Q2 proves resolution, not activation. Q7 proves activation, not that Claude followed the skill or completed the task better. Q3 records relationship edges, not a complete dependency set. Q4 counts only completed observations, so host termination can be invisible.
+For each `retention_subject`, the first observed `session_start` establishes D0. D1, D7, or D30 is present when at least one later session start is observed on that cohort day, from the same or a different agent; multiple sessions on one day count once. Q1 therefore measures later-session retention, not one long session or continued value: session start runs automatically once Symposium is installed. Q2 proves resolution, not activation. Q7 proves activation, not that the agent followed the skill or completed the task better; version 1 can answer Q7 only for Claude. Q3 records relationship edges, not a complete dependency set. Q4 counts only completed observations, so host termination can be invisible.
 
 ### Scope and boundaries
 
@@ -101,9 +105,9 @@ consent-version = 1
 | `Enabled`         | enabled with current consent version     | Events defined by this contract.              |
 
 
-Existing users with an unversioned `enabled = true` must consent again. Interactive `init` and `telemetry enable` present the same disclosure and default to no. Non-interactive calls require an explicit acknowledgement; editing the boolean alone cannot upgrade consent.
+Existing users with an unversioned `enabled = true` must consent again. Interactive `init` and `telemetry enable` present the same team-approved disclosure and default to no. Non-interactive calls require an explicit acknowledgement; editing the boolean alone cannot upgrade consent.
 
-The [consent version 1 disclosure in the proposed telemetry command reference](./proposed-reference-telemetry.md#enable) is authoritative and is shared by interactive `init` and `telemetry enable`. Increase the consent version when collection expands categories, user-derived fields, linkability, timestamp precision, public-name eligibility, or retention, or weakens a normative exclusion. Narrowing collection does not require renewed consent. The [proposed telemetry configuration page](./proposed-configuration-telemetry.md) is authoritative for effective-state semantics.
+The [version 1 disclosure requirements](./proposed-reference-telemetry.md#disclosure-requirements) are authoritative. The command reference also gives a complete example for review, but does not pin its wording as implementation text. The team approves the final wording before recording is activated; `init` and `telemetry enable` then use the same snapshot-tested string. Editorial changes that preserve the required coverage and meaning do not require renewed consent. Increase the consent version when collection expands categories, user-derived fields, linkability, timestamp precision, public-name eligibility, or retention, or weakens a normative exclusion. Narrowing collection does not require renewed consent. The [proposed telemetry configuration page](./proposed-configuration-telemetry.md) is authoritative for effective-state semantics.
 
 Adding an agent enum value creates a new schema version for each affected event kind because existing typed readers cannot parse that value. It does not by itself require renewed consent when the fields, categories, timestamp precision, and correlation boundaries remain inside the accepted disclosure. A new field, hook surface, or linkage for that agent does require a consent-version increase.
 
@@ -125,41 +129,47 @@ Every row has a per-kind schema version, fixed kind, random row id, UTC day, and
 | `extension_resolution`         | One public plugin/skill and one bounded safe path that selected it.                                                  |
 | `hook_metrics`                 | Cumulative daily counters and latency histogram per agent, hook, and identifier epoch.                               |
 | `plugin_hook_metrics`          | Cumulative daily counters/histograms per agent, hook, epoch, and bounded plugin bucket.                              |
-| `extension_invocation_metrics` | Cumulative daily Claude skill-attempt, completion, and failure counters per bounded public or unnamed bucket.        |
+| `extension_invocation_metrics` | Cumulative daily agent skill-attempt, completion, and failure counters per bounded public or unnamed bucket.         |
 | `command`                      | One completed eligible top-level command without arguments.                                                          |
 | `storage_limit`                | At most one daily marker naming the low-volume operation whose whole batch did not fit.                              |
 
 
 The `session_start` event is authoritative for observed-session and return measurements (Q1 and Q5). A `hook_metrics` row whose hook is `session_start` measures only that hook surface's reliability and latency for Q4; its invocation count is not a session count.
 
-Ordinary hook lookup emits no resolution summary. A structured Claude `Skill` observation may update `extension_invocation_metrics` without emitting a resolution event. Internal hook dispatch, telemetry management commands, and ineligible external commands emit no command event. See [What Symposium records](./proposed-data-collected.md) for exact fields and invariants.
+Ordinary hook lookup emits no resolution summary. A structured agent skill-use observation may update `extension_invocation_metrics` without emitting a resolution event; version 1 obtains that observation from Claude's `Skill` signal. Internal hook dispatch, telemetry management commands, and ineligible external commands emit no command event. See [What Symposium records](./proposed-data-collected.md) for exact fields and invariants.
 
 ### Event producers
 
 Producers return typed observations or reports; they never serialize telemetry or write files. The `Recorder` checks consent, applies public-identity and correlation rules, derives identifiers, and sends an accepted event batch or aggregate update to storage.
 
-| Rows | Producer boundary |
-| --- | --- |
-| `session_start` | The outer hook wrapper, after a registered `SessionStart` completes successfully. |
-| `agent_configuration` | The first non-telemetry recording-capable invocation each UTC day, as one all-agent snapshot derived from Symposium's per-user agent list. |
+
+| Rows                                                               | Producer boundary                                                                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `session_start`                                                    | The outer hook wrapper, after a registered `SessionStart` completes successfully.                                                          |
+| `agent_configuration`                                              | The first non-telemetry recording-capable invocation each UTC day, as one all-agent snapshot derived from Symposium's per-user agent list. |
 | `resolution_summary`, `package_resolution`, `extension_resolution` | One structured full-sync report assembled while resolving and installing; telemetry does not rerun predicates or rediscover relationships. |
-| `hook_metrics` | The outer hook wrapper, after the hook's final outcome and duration are known. |
-| `plugin_hook_metrics` | The plugin dispatcher, around each applicable plugin's preparation and execution. |
-| `extension_invocation_metrics` | The Claude `Skill` adapter normalizes targeted pre/success/failure hooks, then the generated installation index supplies safe attribution. |
-| `command` | The top-level CLI dispatcher, after an eligible built-in or public plugin command reaches an outcome. |
-| `storage_limit` | The JSONL sink itself, when a complete low-volume batch cannot fit. |
+| `hook_metrics`                                                     | The outer hook wrapper, after the hook's final outcome and duration are known.                                                             |
+| `plugin_hook_metrics`                                              | The plugin dispatcher, around each applicable plugin's preparation and execution.                                                          |
+| `extension_invocation_metrics`                                     | The Claude `Skill` adapter normalizes targeted pre/success/failure hooks, then the generated installation index supplies safe attribution. |
+| `command`                                                          | The top-level CLI dispatcher, after an eligible built-in or public plugin command reaches an outcome.                                      |
+| `storage_limit`                                                    | The JSONL sink itself, when a complete low-volume batch cannot fit.                                                                        |
+
 
 Agent and package-manager payloads therefore provide input to existing Symposium operations; they do not emit arbitrary telemetry. If a producer cannot construct its complete typed observation, it records nothing for that observation.
 
 ### Identifiers and correlation boundaries
 
-On first enabled recording, telemetry atomically creates a random 32-byte identity key in `state.toml`. It derives the first 128 bits of HMAC-SHA-256 over a domain, locally anchored 30-day window, and exact dimension:
+On first enabled recording, telemetry atomically creates a random 32-byte identity key in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`), separate from the inspectable `<config-dir>/telemetry/` data directory. Symposium creates and replaces this state with owner-only permissions where the platform supports them. It derives the first 128 bits of HMAC-SHA-256 over a domain, locally anchored 30-day window, and exact dimension:
 
 ```text
 HMAC(key, "telemetry:<domain>:v1\0" || window || "\0" || dimension)
 ```
 
 The dimension is included so each identifier represents one installation for one package, agent, or command dimension, never the installation globally.
+
+Private state persists the identity key together with the current identifier-window and return-cohort anchors. Every recorder reads that state under the telemetry lock, so the same domain, window, and dimension produce the same subject across processes and restarts. Normal 30-day rollover changes the window input rather than replacing the key. `disable` and `clear` preserve the key and anchors; renewed consent and `reset-identifiers` replace the key and start a new cohort.
+
+The key is a secret, not anonymized telemetry. Possession permits candidate identifiers to be recomputed, so telemetry commands never print it and it remains outside the inspectable telemetry data directory.
 
 
 | Identifier          | Scope                                                                                            |
@@ -199,11 +209,11 @@ Plugin, skill, and command names follow the same public-by-allowlist rule. This 
 
 Safe nodes are public `package` and `extension` coordinates, `all` contributors, the successful `any` branch, an opaque `not` marker, or `opaque` with a fixed reason (`private_source`, `non_package_predicate`, or `limit`). Shell commands, paths, environment values, custom predicate details, workspace members, wildcards, private names, and a negated child never enter the path.
 
-Paths are bounded to 8 levels, 16 evidence leaves, and 4 KiB; an over-limit subtree becomes `opaque: limit`. Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled; only an enabled recorder serializes that evidence as telemetry. Existing cached booleans for non-package predicates may synthesize `opaque: non_package_predicate`, but caching an entire `PredicateSet` would lose successful branches and witnesses and requires revisiting this design.
+Witness depth counts nested evidence nodes from the root, which is level 1, to a terminal package, extension, `not`, or opaque node. A subtree that would exceed level 8 becomes `opaque: limit`; the complete path is also bounded to 16 evidence leaves and 4 KiB. This limit does not refer to filesystem path components; filesystem paths are never recorded. Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled; only an enabled recorder serializes that evidence as telemetry. Existing cached booleans for non-package predicates may synthesize `opaque: non_package_predicate`, but caching an entire `PredicateSet` would lose successful branches and witnesses and requires revisiting this design.
 
-This preserves actionable resolution relationships without recording a complete dependency snapshot. It proves that an extension resolved. A matching `extension_invocation_metrics` row separately proves that Claude activated the installed skill.
+This preserves actionable resolution relationships without recording a complete dependency snapshot. It proves that an extension resolved. A matching `extension_invocation_metrics` row separately proves that an agent activated the installed skill; version 1 can produce that row only for Claude.
 
-### Hook aggregation and agent capability
+### Hook aggregation and version 1 agent coverage
 
 Each completed hook merges into one daily `hook_metrics` row per agent, surface, and active identifier epoch. Per-plugin preparation/execution merges into `plugin_hook_metrics`. Resets can create another epoch row on the same day. Fixed histogram bounds are `[5, 10, 25, 50, 100, 250, 500, 1000]` milliseconds so rows remain mergeable.
 
@@ -213,18 +223,18 @@ Private plugins merge into unnamed buckets. At most 128 public-plugin rows are n
 
 Hook rows disclose exact daily counts. `pre_tool_use`, `post_tool_use`, and `user_prompt_submit` therefore approximate daily tool/prompt activity even without individual records. Extension invocation rows disclose exact daily skill-attempt, completion, and failure counts. The disclosure states both explicitly.
 
-This matrix reports current adapter capability and test coverage, not telemetry priority. The producer contract is agent-neutral; unavailable values remain optional or unsupported as shown.
+This matrix defines which agent signals version 1 records. It is part of the producer contract, not implementation status or telemetry priority. Unsupported absence means unknown, not zero.
 
 
-| Agent          | Configuration | `SessionStart` | Session id | Fresh/resume | `Stop` | Skill invocation            |
-| -------------- | ------------- | -------------- | ---------- | ------------ | ------ | --------------------------- |
+| Agent          | Configuration | `SessionStart` | Session id | Fresh/resume | `Stop` | Skill invocation           |
+| -------------- | ------------- | -------------- | ---------- | ------------ | ------ | -------------------------- |
 | Claude Code    | yes           | yes            | yes        | yes          | yes    | attempted/completed/failed |
-| Codex CLI      | yes           | yes            | yes        | yes          | no     | unsupported                 |
-| GitHub Copilot | yes           | yes            | no         | no           | no     | unsupported                 |
-| Gemini CLI     | yes           | yes            | yes        | no           | no     | unsupported                 |
-| Kiro           | yes           | yes            | yes        | no           | no     | unsupported                 |
-| OpenCode       | yes           | no             | n/a        | n/a          | no     | unsupported                 |
-| Goose          | yes           | no             | n/a        | n/a          | no     | unsupported                 |
+| Codex CLI      | yes           | yes            | yes        | yes          | no     | unsupported                |
+| GitHub Copilot | yes           | yes            | no         | no           | no     | unsupported                |
+| Gemini CLI     | yes           | yes            | yes        | no           | no     | unsupported                |
+| Kiro           | yes           | yes            | yes        | no           | no     | unsupported                |
+| OpenCode       | yes           | no             | n/a        | n/a          | no     | unsupported                |
+| Goose          | yes           | no             | n/a        | n/a          | no     | unsupported                |
 
 
 Configured reach covers all seven agents; observed-session measures cover only registered hook integrations. `Stop` and structured skill invocation remain Claude-only in version 1. An unsupported agent produces no invocation row, which means unknown rather than zero. `Stop` is not required by Q1-Q7.
@@ -237,11 +247,11 @@ Full sync writes a versioned installation index under the agent skills parent at
 
 The index is atomically replaced after sync determines which installations succeeded. Before naming a public invocation, lookup verifies the Symposium marker and fingerprint. A hook sees an old or new complete index; a missing, corrupt, or stale mapping never falls back to a path or content guess.
 
-Public matches reuse the `extension_subject` derived for the selected safe resolution path. Other observations merge into `unnamed` rows with one fixed reason: `ineligible`, `not_discovered`, `attribution_unavailable`, `ambiguous`, or `invalid_signal`. After 128 named public-skill rows in one UTC day, further public matches merge into `overflow`.
+Public matches reuse the `extension_subject` derived for the selected safe resolution path. Other observations merge into `unnamed` rows with one fixed reason: `ineligible`, `not_indexed`, `attribution_unavailable`, `ambiguous`, or `invalid_signal`. `not_indexed` means a valid attribution index has no matching agent-facing identifier; `attribution_unavailable` means the index is missing, corrupt, or stale. After 128 named public-skill rows in one UTC day, further public matches merge into `overflow`.
 
 Claude's existing `PreToolUse` and `PostToolUse` hooks increment attempts and completions. A `PostToolUseFailure` registration matched only to `Skill` increments failures and does not create generic failure-surface metrics. Each phase update is an independent lower bound: loss of one update means completed plus failed need not equal attempted and may exceed it.
 
-The same all-or-nothing 256-id rule applies to attempted and completed distinct-session sets. A missing id, overflow, or state/snapshot mismatch makes both counts incomplete for that row and day. Completion proves activation only; it does not show whether Claude followed the instructions or improved the result.
+The same all-or-nothing 256-id rule applies to attempted and completed distinct-session sets. A missing id, overflow, or state/snapshot mismatch makes both counts incomplete for that row and day. Completion proves activation only; it does not show whether the agent followed the instructions or improved the result.
 
 ### Recording architecture
 
@@ -264,11 +274,11 @@ A hook prepares its agent response, then converts timings/outcomes into aggregat
 
 ### Storage, concurrency, and retention
 
-Low-volume rows append to `events-YYYY-MM-DD.jsonl`. Current daily hook, plugin-hook, and extension-invocation aggregates live in a bounded, atomically replaced `metrics-YYYY-MM-DD.jsonl` snapshot. `state.toml` holds the identity key, cohort/cleanup metadata, marker state, and temporary keyed session-count sets; these sets are never emitted and expire at day rollover.
+Low-volume rows append to `events-YYYY-MM-DD.jsonl`. Current daily hook, plugin-hook, and extension-invocation aggregates live in a bounded, atomically replaced `metrics-YYYY-MM-DD.jsonl` snapshot under the inspectable telemetry data directory. The sibling private `telemetry-state.toml` holds the identity key, cohort/cleanup metadata, marker state, and temporary keyed session-count sets; these sets are never emitted and expire at day rollover. The telemetry lock remains in the data directory and guards both data and private state mutations.
 
-Recorders make one non-waiting exclusive-lock attempt. Contention drops the entire buffered batch or aggregate observation. Event batches serialize before one append so concurrent lines cannot interleave. Snapshot updates use same-directory temporary replacement; no `fsync` is promised, so a crash can still lose the latest update. Contribution counts detect state/snapshot divergence and permanently mark affected daily session counts incomplete.
+Recorders make one non-waiting exclusive-lock attempt. Contention drops the entire buffered batch or aggregate observation. Event batches serialize before one append so concurrent lines cannot interleave. Snapshot updates use same-directory temporary replacement. Private-state replacement likewise uses a temporary file beside `telemetry-state.toml` in the config directory; abandoned state and snapshot temporaries are ignored and cleaned lazily under the telemetry lock. No `fsync` is promised, so a crash can still lose the latest update. Contribution counts detect state/snapshot divergence and permanently mark affected daily session counts incomplete.
 
-The event file, aggregate snapshot, and reserved maximum-size `storage_limit` row share 8 MiB per day. Aggregate metrics receive at most 512 KiB. An oversized metric update is dropped without stopping low-volume events; an ordinary batch that cannot fit is replaced by the daily marker and ordinary recording stops for that day. Relationship batches are never split.
+The event file, aggregate snapshot, and reserved maximum-size `storage_limit` row share 8 MiB per day. This is a safety ceiling, not expected volume or preallocation: it bounds damage from a producer bug or unexpectedly large resolution batch, while normal recording should remain well below it. Together with D31 expiry, it bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Aggregate metrics receive at most 512 KiB. An oversized metric update is dropped without stopping low-volume events; an ordinary batch that cannot fit is replaced by the daily marker and ordinary recording stops for that day. Relationship batches are never split.
 
 Aggregate counters are lower bounds. No durable counter can quantify observations lost to lock contention, process termination, or I/O failure because those conditions can also prevent writing the counter; a cap-only counter would not measure total loss.
 
@@ -309,16 +319,18 @@ Upload may use only accepted local fields and must preserve scoped-correlation b
 ### Proposed documentation
 
 - [What Symposium records](./proposed-data-collected.md): normative fields, enums, examples, and exclusions.
-- [`cargo agents telemetry`](./proposed-reference-telemetry.md): controls, files, inspection, and concurrency.
+- `[cargo agents telemetry](./proposed-reference-telemetry.md)`: controls, files, inspection, and concurrency.
 - [Telemetry configuration](./proposed-configuration-telemetry.md): consent and effective-state semantics.
 
 These remain proposed pages until implementation lands; shipped design/reference chapters continue to describe the current binary.
 
 ## Frequently asked questions
 
+
+
 ### What does pseudonymous mean here?
 
-A scoped identifier is derived from a random local secret rather than machine identity, but it still links observations inside one stated purpose and window. Rotation and domain separation limit that linkage; they do not make the local files anonymous.
+A scoped identifier is derived from a random local secret rather than machine identity, but it still links observations inside one stated purpose and window. Rotation and domain separation limit that linkage; they do not make the local files anonymous. The secret key is not anonymized or included in telemetry; it remains private because possessing it permits candidate identifiers to be recomputed.
 
 ### Why retain scoped identifiers, provenance, and witnesses before upload?
 
@@ -334,7 +346,7 @@ Hooks are high-volume; Q4 needs rates and distributions, not traces. Resolution 
 
 ### Does a completed skill activation mean the skill helped?
 
-No. It means Claude successfully activated the installed skill. It does not show whether Claude followed the instructions or whether the task result improved. That causal question requires a controlled evaluation comparing equivalent runs with and without the skill.
+No. It means an agent successfully activated the installed skill; version 1 can observe this only for Claude. It does not show whether the agent followed the instructions or whether the task result improved. That causal question requires a controlled evaluation comparing equivalent runs with and without the skill.
 
 ### Why not record a complete dependency snapshot?
 
@@ -370,19 +382,23 @@ After Step 2, Steps 3 and 6 may proceed in parallel. Step 4 follows Step 3, Step
 
 ### Step 1: Telemetry contract and identity
 
-Replace the dormant event types with the closed producer schema: common fields, bounded witnesses, fixed outcomes/histograms, extension-invocation counters and buckets, and per-kind version dispatch. Add telemetry-owned `state.toml`, atomic key creation, scoped HMAC derivation, local 30-day windows, D0-D30 cohorts, and reset primitives. Do not add storage or emission.
+Replace the dormant event types with the closed producer schema: common fields, bounded witnesses, fixed outcomes/histograms, extension-invocation counters and buckets, and per-kind version dispatch. Add private telemetry-owned `<config-dir>/telemetry-state.toml`, atomic owner-only key creation where supported, scoped HMAC derivation, local 30-day windows, D0-D30 cohorts, and reset primitives. Keep this state outside the inspectable telemetry data directory. Do not add storage or emission.
 
-Verify all contract examples round-trip; bounds and unknown versions behave as specified; arbitrary/private data cannot serialize; identities separate domains, dimensions, agents, and windows; D30 rollover/reset works; and disabled paths create nothing.
+Verify all contract examples round-trip; bounds and unknown versions behave as specified; arbitrary/private data cannot serialize; identities separate domains, dimensions, agents, and windows; the same active-window inputs remain stable across recorders and restarts; normal rollover changes subjects without replacing the key; `disable`/`clear` preserve identity state; renewed consent/reset rotate it; and disabled paths create nothing.
 
 - [ ] PR: telemetry contract and scoped identity
+
+
 
 ### Step 2: Storage and local controls
 
 Add whole-batch event appends, non-waiting process locking, atomically replaced aggregate snapshots, daily caps/reservations, `storage_limit`, and lazy D31 cleanup. Add typed `status`, byte-preserving `show`, `clear`, and `reset-identifiers`. Expose a test-only enabled recorder bound to a caller-supplied temporary telemetry home for integration tests and benchmarks. No production caller writes through the sink yet, and no runtime bypass is added.
 
-Verify concurrent complete lines, old-or-new snapshots, whole-operation drops, cap/marker accounting, D30/D31 cleanup, malformed/unknown inspection, clear/reset semantics, test-only recorder isolation, and that management commands never record themselves.
+Verify concurrent complete lines, old-or-new snapshots, whole-operation drops, cap/marker accounting, D30/D31 cleanup, malformed/unknown inspection, private-state permissions and separation, abandoned state/snapshot temporary cleanup, clear/reset semantics, test-only recorder isolation, and that management commands never record themselves.
 
 - [ ] PR: telemetry storage and local controls
+
+
 
 ### Step 3: PM provenance and public-identity policy
 
@@ -392,6 +408,8 @@ Verify every PM and source class, malformed and wildcard coordinates, public all
 
 - [ ] PR: package provenance and public identity policy
 
+
+
 ### Step 4: Resolution witnesses, attribution index, and recording
 
 Return safe evidence from the original predicate evaluation, preserving short-circuit and accepted cache behavior; whole-`PredicateSet` caching remains disallowed. Extend evidence through plugin/skill selection, return one structured full-sync report, and construct coherent `resolution_summary`, `package_resolution`, and `extension_resolution` batches. After installation, atomically replace the generated agent-facing attribution index with entries for successful managed skills and marker fingerprints. Ordinary read-only plugin lookup remains silent.
@@ -399,6 +417,8 @@ Return safe evidence from the original predicate evaluation, preserving short-ci
 Verify `all`/`any`/`not` and opaque/limit paths, cache hits without reevaluation, every `extension_match` case, complete package-to-plugin-to-skill paths, whole-batch failure, successful/failed installation indexing, atomic old-or-new index reads, stale/corrupt/fingerprint-mismatch handling, collisions, and exclusion of raw paths, private names, and dependency snapshots from telemetry.
 
 - [ ] PR: resolution witnesses, installed attribution, and recording
+
+
 
 ### Step 5: Hook and extension-invocation telemetry
 
@@ -410,6 +430,8 @@ Measure the hook path before and after. Verify sanitized automatic/manual activa
 
 - [ ] PR: bounded hook and extension-invocation telemetry
 
+
+
 ### Step 6: Session, configuration, and command telemetry
 
 Add capability-aware `session_start`, daily `agent_configuration`, and eligible top-level `command` rows over the shared recorder. The first non-telemetry recording-capable invocation of each UTC day attempts one all-agent configuration batch from the per-user agent list; it does not inspect agent-owned files. Exclude hook internals, telemetry controls, arguments, and unsafe plugin command names.
@@ -418,10 +440,12 @@ Verify the capability matrix, Copilot without a session id, Claude-only `Stop`, 
 
 - [ ] PR: session reach and command telemetry
 
+
+
 ### Step 7: Consent, activation, and documentation
 
-Add `consent-version`, one shared literal disclosure for `init` and `telemetry enable`, re-consent, explicit non-interactive acknowledgement, `enable`/`disable`, and final production wiring for Steps 4-6. The disclosure names exact daily skill activation and unnamed counts. There is no event-file migration because the dormant recorder was never called. Publish the proposed pages and update current design/flow chapters and `md/SUMMARY.md`.
+Add `consent-version`, one shared team-approved disclosure for `init` and `telemetry enable`, re-consent, explicit non-interactive acknowledgement, `enable`/`disable`, and final production wiring for Steps 4-6. Review the final wording against the version 1 coverage requirements; the proposed prompt is a complete example, not the implementation string. There is no event-file migration because the dormant recorder was never called. Publish the proposed pages and update current design/flow chapters and `md/SUMMARY.md`.
 
-Verify new/existing configuration states, a snapshot of the identical versioned disclosure used by `init` and `telemetry enable`, interactive/non-interactive flows, no partial or disabled collection, absence of a runtime consent bypass, raw inspection/expiry, the full CLI/integration suite, hook-path benchmark, formatting, clippy, workspace tests, mdBook, and orphan checks.
+Verify new/existing configuration states, documented review of the final disclosure against every required coverage point, a snapshot proving `init` and `telemetry enable` use the identical approved text, interactive/non-interactive flows, no partial or disabled collection, absence of a runtime consent bypass, raw inspection/expiry, the full CLI/integration suite, hook-path benchmark, formatting, clippy, workspace tests, mdBook, and orphan checks.
 
 - [ ] PR: telemetry consent and recording activation
