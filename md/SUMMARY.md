@@ -96,6 +96,8 @@
       - [Discovery & sync](./rfds/registry-centric-plugins/discovery-sync/README.md)
       - [User-managed plugins](./rfds/registry-centric-plugins/user-managed-plugins/README.md)
     - [Predicate caching](./rfds/predicate-caching/README.md)
+    - [Agent interaction testing](./rfds/agent-interaction-testing/README.md)
+        - [Proposed: Agent interaction tests](./rfds/agent-interaction-testing/proposed-agent-interaction-testing.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [Configuration parsing and normalization](./rfds/config-normalization/README.md)
     - [RFD Process](./rfds/rfd-process/README.md)
