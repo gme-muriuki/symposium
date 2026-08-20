@@ -1,4 +1,6 @@
-# Proposed: `cargo agents uninstall`
+# `cargo agents uninstall`
+
+> Proposed user documentation for the [Managed Symposium uninstall RFD](../README.md). It does not describe released behavior yet.
 
 Remove agent integrations and private local data managed by Symposium before removing the Symposium package.
 

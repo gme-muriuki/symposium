@@ -1,4 +1,6 @@
-# Proposed: managed integrations
+# Managed integrations
+
+> Proposed user documentation for the [Managed Symposium uninstall RFD](../README.md). It does not describe released behavior yet.
 
 Symposium writes derived state into coding-agent configuration and project directories during init and sync. Managed integrations make those writes discoverable, identifiable, locally activatable, and removable without claiming ownership of surrounding user files.
 

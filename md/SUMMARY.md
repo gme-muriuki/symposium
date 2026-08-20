@@ -97,8 +97,11 @@
       - [User-managed plugins](./rfds/registry-centric-plugins/user-managed-plugins/README.md)
     - [Predicate caching](./rfds/predicate-caching/README.md)
     - [Managed Symposium uninstall](./rfds/symposium-uninstall/README.md)
-        - [Proposed: `cargo agents uninstall`](./rfds/symposium-uninstall/proposed-cargo-agents-uninstall.md)
-        - [Proposed: managed integrations](./rfds/symposium-uninstall/proposed-managed-integrations.md)
+        - [Ownership and managed state](./rfds/symposium-uninstall/ownership/README.md)
+        - [Hook activation](./rfds/symposium-uninstall/hook-activation/README.md)
+        - [Cleanup engine](./rfds/symposium-uninstall/cleanup-engine/README.md)
+        - [`cargo agents uninstall`](./rfds/symposium-uninstall/cargo-agents-uninstall/README.md)
+        - [Managed integrations](./rfds/symposium-uninstall/managed-integrations/README.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [Configuration parsing and normalization](./rfds/config-normalization/README.md)
     - [RFD Process](./rfds/rfd-process/README.md)
