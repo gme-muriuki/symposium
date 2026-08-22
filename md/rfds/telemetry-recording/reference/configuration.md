@@ -26,7 +26,7 @@ version 1:
 | `enabled = true` and `consent-version = 1`   | Enabled                          |
 
 
-The current version is owned by the binary, not accepted as an arbitrary configuration value. The [version 1 disclosure requirements](./proposed-reference-telemetry.md#disclosure-requirements) are authoritative; the full prompt on that page is a non-normative example. Interactive `init` and `telemetry enable` present the same team-approved final text.
+The current version is owned by the binary, not accepted as an arbitrary configuration value. The [version 1 disclosure requirements](./telemetry-command.md#disclosure-requirements) are authoritative; the full prompt on that page is a non-normative example. Interactive `init` and `telemetry enable` present the same team-approved final text.
 
 A future release may require a higher version after a change to collected categories, linkability, timestamp precision, public-name eligibility, retention, or a normative exclusion. It records nothing under an older acknowledgement until you consent again.
 

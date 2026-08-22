@@ -9,7 +9,7 @@
 - Use purpose-scoped pseudonyms and non-waiting, best-effort recording. Telemetry failure must not disrupt hooks, sync, or commands.
 - Defer upload, server-side handling, and subjective feedback to separate follow-up efforts tracked under [#246](https://github.com/symposium-dev/symposium/issues/246).
 
-Supporting pages: [data contract and exclusions](./proposed-data-collected.md), [telemetry command reference and consent disclosure](./proposed-reference-telemetry.md), and [configuration and consent states](./proposed-configuration-telemetry.md).
+Supporting pages: [data contract and exclusions](./contract/recorded-data.md), [telemetry command reference and consent disclosure](./reference/telemetry-command.md), and [configuration and consent states](./reference/configuration.md).
 
 ## Motivation
 
@@ -34,7 +34,7 @@ agent skill use  -> extension_invocation_metrics snapshot
 command          -> command
 ```
 
-The [exhaustive data contract](./proposed-data-collected.md) owns exact fields, enums, exclusions, and complete JSONL examples. The main design has these invariants:
+The [exhaustive data contract](./contract/recorded-data.md) owns exact fields, enums, exclusions, and complete JSONL examples. The main design has these invariants:
 
 - Only `Enabled` recording can create telemetry state or files.
 - The producer accepts closed typed data, never arbitrary metadata or raw errors.
@@ -107,7 +107,7 @@ consent-version = 1
 
 Existing users with an unversioned `enabled = true` must consent again. Interactive `init` and `telemetry enable` present the same team-approved disclosure and default to no. Non-interactive calls require an explicit acknowledgement; editing the boolean alone cannot upgrade consent.
 
-The [version 1 disclosure requirements](./proposed-reference-telemetry.md#disclosure-requirements) are authoritative. The command reference also gives a complete example for review, but does not pin its wording as implementation text. The team approves the final wording before recording is activated; `init` and `telemetry enable` then use the same snapshot-tested string. Editorial changes that preserve the required coverage and meaning do not require renewed consent. Increase the consent version when collection expands categories, user-derived fields, linkability, timestamp precision, public-name eligibility, or retention, or weakens a normative exclusion. Narrowing collection does not require renewed consent. The [proposed telemetry configuration page](./proposed-configuration-telemetry.md) is authoritative for effective-state semantics.
+The [version 1 disclosure requirements](./reference/telemetry-command.md#disclosure-requirements) are authoritative. The command reference also gives a complete example for review, but does not pin its wording as implementation text. The team approves the final wording before recording is activated; `init` and `telemetry enable` then use the same snapshot-tested string. Editorial changes that preserve the required coverage and meaning do not require renewed consent. Increase the consent version when collection expands categories, user-derived fields, linkability, timestamp precision, public-name eligibility, or retention, or weakens a normative exclusion. Narrowing collection does not require renewed consent. The [telemetry configuration reference](./reference/configuration.md) is authoritative for effective-state semantics.
 
 Adding an agent enum value creates a new schema version for each affected event kind because existing typed readers cannot parse that value. It does not by itself require renewed consent when the fields, categories, timestamp precision, and correlation boundaries remain inside the accepted disclosure. A new field, hook surface, or linkage for that agent does require a consent-version increase.
 
@@ -136,7 +136,7 @@ Every row has a per-kind schema version, fixed kind, random row id, UTC day, and
 
 The `session_start` event is authoritative for observed-session and return measurements (Q1 and Q5). A `hook_metrics` row whose hook is `session_start` measures only that hook surface's reliability and latency for Q4; its invocation count is not a session count.
 
-Ordinary hook lookup emits no resolution summary. A structured agent skill-use observation may update `extension_invocation_metrics` without emitting a resolution event; version 1 obtains that observation from Claude's `Skill` signal. Internal hook dispatch, telemetry management commands, and ineligible external commands emit no command event. See [What Symposium records](./proposed-data-collected.md) for exact fields and invariants.
+Ordinary hook lookup emits no resolution summary. A structured agent skill-use observation may update `extension_invocation_metrics` without emitting a resolution event; version 1 obtains that observation from Claude's `Skill` signal. Internal hook dispatch, telemetry management commands, and ineligible external commands emit no command event. See [What Symposium records](./contract/recorded-data.md) for exact fields and invariants.
 
 ### Event producers
 
@@ -282,7 +282,7 @@ The event file, aggregate snapshot, and reserved maximum-size `storage_limit` ro
 
 Aggregate counters are lower bounds. No durable counter can quantify observations lost to lock contention, process termination, or I/O failure because those conditions can also prevent writing the counter; a cap-only counter would not measure total loss.
 
-Files survive D30 and become eligible for lazy deletion when `current_day - file_day > 30`, first on D31. `clear` deletes event/metric files and pending count sets but preserves consent and identity/cohort state. `reset-identifiers` rotates future identifiers without rewriting old files. `disable` stops recording but keeps files by default; uninstall also leaves them. Exact command behavior belongs to the [telemetry CLI reference](./proposed-reference-telemetry.md).
+Files survive D30 and become eligible for lazy deletion when `current_day - file_day > 30`, first on D31. `clear` deletes event/metric files and pending count sets but preserves consent and identity/cohort state. `reset-identifiers` rotates future identifiers without rewriting old files. `disable` stops recording but keeps files by default; uninstall also leaves them. Exact command behavior belongs to the [telemetry CLI reference](./reference/telemetry-command.md).
 
 Concurrent agents produce separate session and agent/hook rows. The same public package/path derives the same dimension subject for unique-install deduplication, but no project id links the agents. A simultaneous flush may be dropped; concurrent mutation of installed skills remains a separate problem.
 
@@ -290,7 +290,7 @@ Concurrent agents produce separate session and agent/hook rows. The same public 
 
 Schema versions are per event kind. Semantic or correlation changes create a new version; privacy expansions also require a new consent version. Readers retain malformed and unknown lines, count them separately, and exclude them from typed analysis; raw `show` preserves their bytes.
 
-The ["What is never recorded" section of the proposed data contract](./proposed-data-collected.md#what-is-never-recorded) is a producer rule. In summary: no prompt/tool content or per-invocation rows, raw errors/payloads, paths or workspace identity, environment/machine/account values, private-source names, arbitrary URLs, global identifiers, or timestamps finer than one second.
+The ["What is never recorded" section of the data contract](./contract/recorded-data.md#what-is-never-recorded) is a producer rule. In summary: no prompt/tool content or per-invocation rows, raw errors/payloads, paths or workspace identity, environment/machine/account values, private-source names, arbitrary URLs, global identifiers, or timestamps finer than one second.
 
 Here, the per-invocation exclusion includes individual skill activations and raw agent-facing skill identifiers.
 
@@ -318,9 +318,9 @@ Upload may use only accepted local fields and must preserve scoped-correlation b
 
 ### Proposed documentation
 
-- [What Symposium records](./proposed-data-collected.md): normative fields, enums, examples, and exclusions.
-- `[cargo agents telemetry](./proposed-reference-telemetry.md)`: controls, files, inspection, and concurrency.
-- [Telemetry configuration](./proposed-configuration-telemetry.md): consent and effective-state semantics.
+- [What Symposium records](./contract/recorded-data.md): normative fields, enums, examples, and exclusions.
+- [`cargo agents telemetry`](./reference/telemetry-command.md): controls, files, inspection, and concurrency.
+- [Telemetry configuration](./reference/configuration.md): consent and effective-state semantics.
 
 These remain proposed pages until implementation lands; shipped design/reference chapters continue to describe the current binary.
 

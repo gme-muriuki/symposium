@@ -97,9 +97,9 @@
       - [User-managed plugins](./rfds/registry-centric-plugins/user-managed-plugins/README.md)
     - [Predicate caching](./rfds/predicate-caching/README.md)
     - [Telemetry: recording events](./rfds/telemetry-recording/README.md)
-      - [What Symposium records](./rfds/telemetry-recording/proposed-data-collected.md)
-      - [`cargo agents telemetry`](./rfds/telemetry-recording/proposed-reference-telemetry.md)
-      - [Telemetry configuration](./rfds/telemetry-recording/proposed-configuration-telemetry.md)
+      - [What Symposium records](./rfds/telemetry-recording/contract/recorded-data.md)
+      - [`cargo agents telemetry`](./rfds/telemetry-recording/reference/telemetry-command.md)
+      - [Telemetry configuration](./rfds/telemetry-recording/reference/configuration.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [Configuration parsing and normalization](./rfds/config-normalization/README.md)
     - [RFD Process](./rfds/rfd-process/README.md)

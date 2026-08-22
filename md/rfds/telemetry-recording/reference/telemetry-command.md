@@ -1,6 +1,6 @@
 # `cargo agents telemetry`
 
-Manage opt-in, per-user local telemetry. See [What Symposium records](./proposed-data-collected.md) for the exhaustive field list and [Telemetry configuration](./proposed-configuration-telemetry.md) for consent semantics.
+Manage opt-in, per-user local telemetry. See [What Symposium records](../contract/recorded-data.md) for the exhaustive field list and [Telemetry configuration](./configuration.md) for consent semantics.
 
 Telemetry is off by default. Nothing is uploaded.
 
@@ -50,7 +50,7 @@ Before asking for consent, the team-approved version 1 disclosure must make thes
 - The main exclusions are stated plainly, including prompt/tool content, paths, project/workspace identity, environment and machine identity, raw errors and agent/package-manager payloads, private package/plugin/skill names, and individual hook or skill-invocation rows.
 - Recorded data and private identifier/counting state remain local in their stated locations, nothing is uploaded, data remains through D30 and is eligible for deletion on D31, and the disclosure names the inspection and deletion commands.
 
-The [exhaustive field list](./proposed-data-collected.md) and [never-record list](./proposed-data-collected.md#what-is-never-recorded) define the details behind these requirements. The team may revise structure, tone, and wording before implementation, provided the final disclosure preserves every required point and its meaning. `cargo agents init` and `cargo agents telemetry enable` must use the same approved text and both default to no.
+The [exhaustive field list](../contract/recorded-data.md) and [never-record list](../contract/recorded-data.md#what-is-never-recorded) define the details behind these requirements. The team may revise structure, tone, and wording before implementation, provided the final disclosure preserves every required point and its meaning. `cargo agents init` and `cargo agents telemetry enable` must use the same approved text and both default to no.
 
 ### Example version 1 disclosure
 
