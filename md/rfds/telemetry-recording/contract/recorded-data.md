@@ -1,13 +1,12 @@
 # What Symposium records
 
-Telemetry is off by default, per-user, and stored only on your machine. Nothing described on this page is uploaded. `cargo agents telemetry show` exposes the exact stored bytes, and `cargo agents telemetry clear` deletes event and aggregate-metric files. The [never-record list](#what-is-never-recorded) summarizes the exclusions before the field-by-field contract.
+Symposium records telemetry only after you opt in. The records stay on your machine; nothing described on this page is uploaded. `cargo agents telemetry show` displays the stored bytes, and `cargo agents telemetry clear` deletes event and aggregate-metric files. The [never-record list](#what-is-never-recorded) summarizes the exclusions.
 
-This page is the exhaustive producer contract. If a field is not listed here, Symposium does not write it as telemetry under consent version 1.
+This page is the complete producer contract for consent version 1. If a field is not listed here, Symposium does not write it as telemetry.
 
 ## Common fields
 
 Every JSONL row has:
-
 
 | Field       | Example         | Meaning                                 |
 | ----------- | --------------- | --------------------------------------- |
@@ -17,8 +16,9 @@ Every JSONL row has:
 | `day`       | `2026-08-03`    | UTC calendar day.                       |
 | `symposium` | `0.4.0`         | Symposium version that wrote the event. |
 
+Completed operational events (`session_start` and `command`) also have `at`, an RFC3339 UTC timestamp truncated to one second. Resolution, configuration, and aggregate metric rows have only `day`.
 
-Completed operational events (`session_start` and `command`) also have `at`, an RFC3339 UTC timestamp truncated to one second. Resolution, configuration, and aggregate metric rows have only `day`. Counters and durations are non-negative JSON integers fitting an unsigned 64-bit value. Arithmetic is checked; an overflowing batch or observation is dropped rather than wrapped.
+Counters and durations are non-negative JSON integers that fit an unsigned 64-bit value. Symposium checks arithmetic and drops an overflowing batch or observation instead of wrapping the value.
 
 `event_id` exists to deduplicate a future retry of the same event or identify one cumulative metric row. A metric row keeps the `event_id` minted when its dimension first appears that UTC day as the row is rewritten. It is not an installation, session, account, or project identifier.
 
@@ -41,10 +41,17 @@ These are independent row-shape examples, not one coherent operation or batch. T
 
 ## Scoped identifiers
 
-When enabled recording first needs identity state, Symposium stores a random secret key in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). The same state persists the current identifier-window and return-cohort anchors. Every recorder reads this state under the telemetry lock, so identical domain, window, and dimension inputs produce the same subject across processes and restarts. Normal 30-day rollover changes the window input without replacing the key; renewed consent or `telemetry reset-identifiers` replaces it. `telemetry disable` and `telemetry clear` preserve the key and anchors.
+### Key and rotation
 
-This file is separate from the inspectable `<config-dir>/telemetry/` data directory and has owner-only permissions where the platform supports them. Symposium derives keyed identifiers for narrow purposes. The key is a secret rather than anonymized telemetry: it is not written into events, printed by telemetry commands, or derived from your machine, and possession permits candidate identifiers to be recomputed.
+When an enabled recorder first needs identity state, Symposium stores a random secret key in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). The same state holds the current identifier-window and return-cohort anchors. Every recorder reads it under the telemetry lock, so identical domain, window, and dimension inputs produce the same subject across processes and restarts.
 
+Normal 30-day rollover changes the window input without replacing the key. Renewed consent or `telemetry reset-identifiers` replaces it. `telemetry disable` and `telemetry clear` preserve the key and anchors.
+
+This file is separate from the inspectable `<config-dir>/telemetry/` data directory and has owner-only permissions where the platform supports them. The key is private state, not anonymized telemetry. It is not written into events, printed by telemetry commands, or derived from your machine. Someone who has the key can recompute candidate identifiers.
+
+### What identifiers can link
+
+Symposium derives each identifier for one narrow purpose:
 
 | Identifier          | What it can link                                               | Rotation                          |
 | ------------------- | -------------------------------------------------------------- | --------------------------------- |
@@ -57,8 +64,9 @@ This file is separate from the inspectable `<config-dir>/telemetry/` data direct
 | `plugin_subject`    | Daily hook aggregates for one eligible public plugin           | 30 days                           |
 | `command_subject`   | Repeated use of one eligible command                           | 30 days                           |
 
+These values are pseudonymous, not anonymous: they deliberately permit limited linking inside the stated scope. `retention_subject` can link observed sessions across agents for D0-D30; this is the single exception needed for return measurement. No identifier links that cohort, a package subject, and a command subject, and there is no workspace id.
 
-These values are pseudonymous, not anonymous: they deliberately permit limited linking inside the stated scope. `retention_subject` can link observed sessions across agents for D0-D30; this is the single exception needed for return measurement. No identifier links that cohort, a package subject, and a command subject, and there is no workspace id. However, all lines in your local telemetry directory come from your Symposium home; file order and same-day events can still suggest which observations happened together.
+All lines in your local telemetry directory still come from your Symposium home. File order and same-day events can therefore suggest which observations happened together.
 
 ## Version 1 public identity allowlists
 
@@ -75,8 +83,7 @@ Only the following stable labels can make package, plugin, skill, or plugin-comm
 
 ### `session_start`
 
-A registered Symposium session-start hook completed.
-
+This row records a completed registered Symposium session-start hook.
 
 | Field               | Values                                         | Meaning                                                 |
 | ------------------- | ---------------------------------------------- | ------------------------------------------------------- |
@@ -89,15 +96,15 @@ A registered Symposium session-start hook completed.
 | `retention_subject` | scoped id                                      | Deduplicates this D0-D30 observed-session cohort.       |
 | `cohort_day`        | integer `0` through `30`                       | UTC days since the cohort's first observed session.     |
 
-
 GitHub Copilot does not currently supply a session id. OpenCode and Goose do not currently call Symposium through a registered session-start hook, so they do not produce this event.
 
-These rows, not `hook_metrics` rows whose `hook` is `session_start`, are authoritative for observed-session and return measurements. For each `retention_subject`, the first row establishes D0; D1, D7, or D30 is present when at least one later session-start row has that `cohort_day`, regardless of agent or vendor session id. Multiple rows on the same cohort day count once. The aggregate hook rows measure only session-start hook reliability and latency.
+These rows, not `hook_metrics` rows whose `hook` is `session_start`, are authoritative for observed-session and return measurements. For each `retention_subject`, the first row establishes D0. D1, D7, or D30 is present when at least one later session-start row has that `cohort_day`, regardless of agent or vendor session id. Multiple rows on the same cohort day count once.
+
+The aggregate hook rows measure only session-start hook reliability and latency.
 
 ### `agent_configuration`
 
-A daily observation of whether a supported agent is configured for Symposium.
-
+This row records whether a supported agent is configured for Symposium that day.
 
 | Field           | Values                                                              | Meaning                                                  |
 | --------------- | ------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -107,15 +114,15 @@ A daily observation of whether a supported agent is configured for Symposium.
 | `arch`          | `x86_64`, `aarch64`, `other`                                        | Architecture class for the running build.                |
 | `agent_subject` | scoped id                                                           | Deduplicates one installation for this agent and window. |
 
+On the first non-telemetry recording-capable invocation each UTC day, Symposium attempts one whole batch containing all seven agents. `configured` means the agent is present in Symposium's per-user configuration at that moment; Symposium does not inspect agent-owned configuration files.
 
-On the first non-telemetry recording-capable invocation each UTC day, Symposium attempts one whole batch containing all seven agents. `configured` means the agent is present in Symposium's per-user configuration at that moment; Symposium does not inspect agent-owned configuration files. A successful batch is the day's snapshot, so later configuration changes appear on the next UTC day's snapshot. If locking, storage, or I/O drops the batch, it remains outstanding and a later eligible invocation retries it.
+A successful batch is the day's snapshot, so later configuration changes appear on the next UTC day's snapshot. If locking, storage, or I/O drops the batch, it remains outstanding and a later eligible invocation retries it.
 
 `configured: true` does not claim that an agent session ran or that the agent-owned integration files remain intact.
 
 ### `resolution_summary`
 
-A full sync reached an observed result after session start, manual sync, `use`, or removal. Package/plugin/skill counts are distinct coordinates within the sync, not duplicate declarations.
-
+This row records the result of a full sync after session start, manual sync, `use`, or removal. Package, plugin, and skill counts are distinct coordinates within the sync, not duplicate declarations.
 
 | Field              | Values                                          | Meaning                                                           |
 | ------------------ | ----------------------------------------------- | ----------------------------------------------------------------- |
@@ -134,13 +141,11 @@ A full sync reached an observed result after session start, manual sync, `use`, 
 
 `unnamed_package_reasons` has exactly `private_registry`, `git`, `path`, `workspace`, `unknown_source`, and `invalid_coordinate` counters. Each unnamed package increments exactly one. Source provenance takes precedence; `invalid_coordinate` is used only for an allowlisted public source with a malformed name or a missing, wildcard, or invalid exact version. The counters sum to `unnamed_packages`.
 
-
 Read-only extension lookup on ordinary hook calls does not produce this event.
 
 ### `package_resolution`
 
-One eligible public resolution-input package observed during a full sync.
-
+This row records one eligible public package used as resolution input during a full sync.
 
 | Field               | Values                  | Meaning                                                              |
 | ------------------- | ----------------------- | -------------------------------------------------------------------- |
@@ -150,15 +155,19 @@ One eligible public resolution-input package observed during a full sync.
 | `extension_match`   | `public`, `unnamed_only`, `none` | What kind of resolved extension, if any, the package contributed to. |
 | `package_subject`   | scoped id               | Deduplicates this exact coordinate for 30 days.                      |
 
+A package is named only when its package manager reports provenance matching a reviewed public-registry allowlist. Registry URLs themselves are not recorded.
 
-A package is named only when its package manager reports provenance matching a reviewed public-registry allowlist. Registry URLs themselves are not recorded. `extension_match: public` means at least one eligible public extension matched, including when unnamed content also matched. `unnamed_only` means extension content matched but none was eligible to name. `none` means no resolved extension matched.
+`extension_match` describes what the package contributed:
+
+- `public`: at least one eligible public extension matched, including when unnamed content also matched.
+- `unnamed_only`: extension content matched, but none was eligible to name.
+- `none`: no resolved extension matched.
 
 Events measure packages independently. Symposium does not record a workspace/resolution id, but the summary and contiguous relationship batch can still make the public package set for one sync recoverable, especially when only one sync occurred that day. Review the whole file before sharing it.
 
 ### `extension_resolution`
 
-One public plugin or skill and one safe path that selected it.
-
+This row records one public plugin or skill and one safe path that selected it.
 
 | Field               | Values                      | Meaning                                             |
 | ------------------- | --------------------------- | --------------------------------------------------- |
@@ -168,9 +177,7 @@ One public plugin or skill and one safe path that selected it.
 | `path`              | bounded typed nodes         | Actual safe package/predicate/extension chain.      |
 | `extension_subject` | scoped id                   | Deduplicates this safe target/path for 30 days.     |
 
-
 Path nodes are limited to:
-
 
 | Node `type` | Recorded content                                                     |
 | ----------- | -------------------------------------------------------------------- |
@@ -181,15 +188,15 @@ Path nodes are limited to:
 | `not`       | Marker only; the child is not recorded.                              |
 | `opaque`    | Fixed reason: `private_source`, `non_package_predicate`, or `limit`. |
 
+Shell commands, paths, environment variables, custom predicate names or arguments, and private package or extension names never enter a path. An opaque marker can represent their position.
 
-Shell commands, paths, environment variables, custom predicate names/arguments, and private package/extension names never enter a path. Their position can be represented by an opaque marker. Witness depth counts nested evidence nodes from the root, which is level 1, to a terminal package, extension, `not`, or opaque node. A subtree that would exceed level 8 becomes `opaque: limit`; the complete path is also limited to 16 evidence leaves and 4 KiB. This limit does not refer to filesystem path components; filesystem paths are never recorded.
+Witness depth counts nested evidence nodes from the root, which is level 1, to a terminal package, extension, `not`, or opaque node. A subtree that would exceed level 8 becomes `opaque: limit`. The complete path is also limited to 16 evidence leaves and 4 KiB. Evidence depth does not count filesystem components; filesystem paths are never recorded.
 
 This event says an extension resolved. It does not say that an agent read or used the extension; a matching `extension_invocation_metrics` aggregate separately reports observed agent activation. Version 1 can produce that aggregate only for Claude.
 
 ### `hook_metrics`
 
-The cumulative aggregate for one UTC day, agent, hook surface, and active identifier epoch. An epoch normally lasts 30 days but ends early on identifier reset or renewed consent. A reset can therefore leave two rows for the same agent/hook/day with different `hook_subject` values. A completed hook updates the current row in place; Symposium does not append one telemetry row per invocation.
-
+This cumulative row combines completed hook observations for one UTC day, agent, hook surface, and active identifier epoch. An epoch normally lasts 30 days but ends early after identifier reset or renewed consent. A reset can therefore leave two rows for the same agent, hook, and day with different `hook_subject` values. Symposium updates the current row instead of appending one telemetry row per invocation.
 
 | Field                             | Values                                                                         | Meaning                                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -205,13 +212,13 @@ The cumulative aggregate for one UTC day, agent, hook surface, and active identi
 | `identified_sessions_non_ok`      | integer, optional                                                              | Those sessions with at least one non-`ok` observation; present only when counts are complete. |
 | `hook_subject`                    | scoped id                                                                      | Links this agent/hook dimension inside its 30-day identifier window.                         |
 
+`outcomes` and the duration histogram each sum to `invocations`. Exactly one outcome counter advances for each completed observation. Precedence is `internal_error`, then `blocked`, then `plugin_error`, then `ok`.
 
-`outcomes` and the duration histogram each sum to `invocations`. The top-level outcome precedence is `internal_error`, then `blocked`, then `plugin_error`, then `ok`; exactly one counter advances per completed observation. Session counts remain complete only if every contributing observation supplied a session id and neither of the two sets exceeded 256 distinct ids for this row. On the first missing id or overflow, Symposium discards both sets, writes `session_counts_complete: false`, and omits both counts for the rest of that day. The raw and keyed session ids are never written into the aggregate file.
+Session counts remain complete only when every contributing observation supplies a session id and neither set exceeds 256 distinct ids for the row. On the first missing id or overflow, Symposium discards both sets, writes `session_counts_complete: false`, and omits both counts for the rest of that day. Raw and keyed session ids are never written into the aggregate file.
 
 ### `plugin_hook_metrics`
 
-The cumulative aggregate for one UTC day, agent, hook surface, active identifier epoch, and bounded plugin bucket. A reset can leave multiple otherwise identical `unnamed` or `overflow` rows distinguished only by `event_id`; public rows also receive a new `plugin_subject`.
-
+This cumulative row combines plugin-hook observations for one UTC day, agent, hook surface, active identifier epoch, and bounded plugin bucket. A reset can leave otherwise identical `unnamed` or `overflow` rows distinguished only by `event_id`; public rows also receive a new `plugin_subject`.
 
 | Field                         | Values                                                                         | Meaning                                                                                     |
 | ----------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -230,8 +237,21 @@ The cumulative aggregate for one UTC day, agent, hook surface, active identifier
 | `identified_sessions_non_ok`  | integer, optional                                                              | Those sessions with at least one non-`ok` attempt; present only when counts are complete.    |
 | `plugin_subject`              | scoped id, conditional                                                         | Present only with an eligible public plugin.                                                |
 
+#### Counting rules
 
-`attempts` counts only terminal results and `executions` counts the subset that started child execution. A preparation failure is terminal `error` with no execution. `outcomes` and `prepare_ms` each sum to `attempts`; `execute_ms` sums to `executions`. Across every epoch and bucket for one agent/hook/day, plugin `attempts` sum to the corresponding top-level `plugins_completed`. `blocked` means the plugin requested a block, `error` covers any closed preparation/execution failure, and `ok` is every other completed attempt. The same 256-id all-or-nothing session rule applies. Eligible public plugins use `{source, name}` coordinates from the reviewed allowlist. Private, local, invalid, or otherwise ineligible plugins merge into one `unnamed` row per agent/hook/epoch/day and expose no identity. At most 128 named public-plugin rows may appear across all agents, hooks, and identifier epochs in one UTC day; attempts for later rows merge into `overflow` rows per agent/hook/epoch and expose no identity. Identifier reset does not reset this daily limit. Named rows are first-observed, not sampled: earlier-in-day public plugins are overrepresented when the limit is reached. Analysis must report overflow and must not treat the named subset as random.
+`attempts` counts terminal results. `executions` counts the subset that started child execution. A preparation failure is terminal `error` with no execution. `outcomes` and `prepare_ms` each sum to `attempts`; `execute_ms` sums to `executions`. Across every epoch and bucket for one agent, hook, and day, plugin `attempts` sum to the corresponding top-level `plugins_completed`.
+
+`blocked` means the plugin requested a block. `error` covers a closed preparation or execution failure. `ok` is every other completed attempt. The same 256-id all-or-nothing session rule used by `hook_metrics` applies.
+
+#### Plugin identity and row limits
+
+Eligible public plugins use `{source, name}` coordinates from the reviewed allowlist. Private, local, invalid, or otherwise ineligible plugins merge into one `unnamed` row per agent, hook, epoch, and day and expose no identity.
+
+At most 128 named public-plugin rows may appear across all agents, hooks, and identifier epochs in one UTC day. Attempts for later rows merge into `overflow` rows per agent, hook, and epoch and expose no identity. Identifier reset does not reset this daily limit.
+
+Named rows are first-observed, not sampled, so earlier-in-day public plugins are overrepresented when the limit is reached. Analysis must report overflow and must not treat the named subset as random.
+
+### Rules shared by hook aggregates
 
 A latency histogram is exactly:
 
@@ -241,13 +261,15 @@ A latency histogram is exactly:
 
 The nine non-overlapping millisecond buckets mean `<=5`, `(5,10]`, `(10,25]`, `(25,50]`, `(50,100]`, `(100,250]`, `(250,500]`, `(500,1000]`, and `>1000`. Bounds and count-array length cannot vary. Fixed histograms can be merged correctly across installations; locally calculated percentiles cannot.
 
-Neither aggregate kind has `at`, an invocation id, a raw or scoped session id, or an individual invocation's time or outcome. No hook input, output, stdout, stderr, error text, or numeric exit detail is recorded. Symposium adds no timeout as part of telemetry. A host termination, lock conflict, storage limit, or I/O failure can omit an observation. Aggregate counts are therefore lower bounds. No durable dropped-update counter can cover every loss mode because lock contention, termination, and I/O failure can also prevent writing that counter; counting only cap rejections would imply false completeness.
+Neither aggregate kind has `at`, an invocation id, a raw or scoped session id, or an individual invocation's time or outcome. No hook input, output, stdout, stderr, error text, or numeric exit detail is recorded. Symposium adds no timeout as part of telemetry.
+
+A host termination, lock conflict, storage limit, or I/O failure can omit an observation, so aggregate counts are lower bounds. No durable dropped-update counter can cover every loss mode because lock contention, termination, and I/O failure can also prevent writing that counter. Counting only cap rejections would imply false completeness.
 
 These rows do reveal exact daily counts for each hook surface. In particular, `pre_tool_use`, `post_tool_use`, and `user_prompt_submit` counts are proxies for daily tool and prompt activity even though no individual activity record exists.
 
 ### `extension_invocation_metrics`
 
-The cumulative aggregate for one UTC day, supported agent, active identifier epoch, and bounded skill bucket. Version 1 supports only Claude Code and accepts only its fixture-tested `Skill` signal. Symposium does not append one row per invocation.
+This cumulative row combines skill-invocation observations for one UTC day, supported agent, active identifier epoch, and bounded skill bucket. Version 1 supports only Claude Code and accepts only its fixture-tested `Skill` signal. Symposium does not append one row per invocation.
 
 | Field                           | Values                                                                                              | Meaning                                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -265,9 +287,25 @@ The cumulative aggregate for one UTC day, supported agent, active identifier epo
 | `identified_sessions_completed` | integer, optional                                                                                    | Distinct sessions with a completed observation; present only when session counts are complete.          |
 | `extension_subject`             | scoped id, conditional                                                                               | Present only for a public bucket; matches the selected safe resolution path for 30 days.                 |
 
-`attempted`, `completed`, and `failed` are independent lower bounds. Each hook phase updates the snapshot separately, so loss of one update means completed plus failed need not equal attempted and may exceed it. The two session counts have the same independence. `failed` advances only when the supported agent emits its targeted failure signal; for version 1, that is Claude's `PostToolUseFailure:Skill` event. Denial, termination, or a missing terminal observation is not inferred as failure. Completion means the agent successfully activated the skill; it does not show whether the agent followed its instructions or improved the task result.
+#### Count semantics
 
-Public attribution comes only from the generated installation index and a matching Symposium marker fingerprint. `ineligible` combines private, local, invalid, and otherwise unsafe-to-name installed skills. `not_indexed` means the index was valid and readable but contained no entry matching the agent-facing identifier. `attribution_unavailable` means the index was missing, corrupt, or stale. `ambiguous` means more than one entry matched. `invalid_signal` means the Claude payload did not match the validated schema. No reason exposes the raw identifier.
+`attempted`, `completed`, and `failed` are independent lower bounds. Each hook phase updates the snapshot separately. If one update is lost, completed plus failed need not equal attempted and may exceed it. The two session counts have the same independence.
+
+`failed` advances only when the supported agent emits its targeted failure signal. For version 1, that is Claude's `PostToolUseFailure:Skill` event. Symposium does not infer failure from denial, termination, or a missing terminal observation. Completion means that the agent activated the skill; it does not show whether the agent followed its instructions or improved the task result.
+
+#### Attribution
+
+Public attribution comes only from the generated installation index and a matching Symposium marker fingerprint. Unnamed reasons have these meanings:
+
+- `ineligible`: the installed skill was private, local, invalid, or otherwise unsafe to name.
+- `not_indexed`: the index was valid and readable but contained no matching agent-facing identifier.
+- `attribution_unavailable`: the index was missing, corrupt, or stale.
+- `ambiguous`: more than one entry matched.
+- `invalid_signal`: the Claude payload did not match the validated schema.
+
+No reason exposes the raw identifier.
+
+#### Row and session limits
 
 At most 128 public-skill rows may be named across identifier epochs in one UTC day. Later public skills merge into one `overflow` row per agent and epoch. Each fixed unnamed reason produces at most one row per agent and epoch. The public subset is first-observed, not sampled; analysis must report overflow and include unnamed counts when interpreting the public denominator.
 
@@ -277,8 +315,7 @@ This aggregate has no `at`, duration, raw or scoped session id, invocation id, t
 
 ### `command`
 
-One eligible top-level user command completed.
-
+This row records one completed eligible top-level user command.
 
 | Field             | Values           | Meaning                                                       |
 | ----------------- | ---------------- | ------------------------------------------------------------- |
@@ -287,7 +324,6 @@ One eligible top-level user command completed.
 | `duration_ms`     | integer          | Top-level command duration.                                   |
 | `outcome`         | `ok`, `error`    | Closed result.                                                |
 | `command_subject` | scoped id        | Deduplicates this command for 30 days.                        |
-
 
 Arguments are never recorded. Internal `hook`, all `telemetry` commands, and ineligible external/plugin commands do not produce command events.
 
@@ -305,7 +341,9 @@ An eligible plugin command contains only its reviewed public-source label, publi
 
 ### `storage_limit`
 
-The next complete low-volume event batch did not fit in the shared daily 8 MiB allowance. In addition to the common fields, `dropped_operation` is `session_start`, `manual_sync`, `use`, `remove`, `init`, `configuration`, or `command`, identifying the top-level operation whose batch was rejected. This event appears at most once per UTC day and the marker itself counts toward 8 MiB. An aggregate-metric update that would exceed its separate 512 KiB maximum or the remaining shared allowance is dropped without this marker and does not stop low-volume recording. The marker does not report lock-contention, aggregate-update, or crash losses.
+This row means that the next complete low-volume event batch did not fit in the shared daily 8 MiB allowance. In addition to the common fields, `dropped_operation` is `session_start`, `manual_sync`, `use`, `remove`, `init`, `configuration`, or `command`. It identifies the top-level operation whose batch was rejected.
+
+The row appears at most once per UTC day, and the marker itself counts toward 8 MiB. An aggregate-metric update that would exceed its separate 512 KiB maximum or the remaining shared allowance is dropped without this marker and does not stop low-volume recording. The marker does not report lock-contention, aggregate-update, or crash losses.
 
 ## What is never recorded
 
@@ -324,12 +362,36 @@ The next complete low-volume event batch did not fit in the shared daily 8 MiB a
 
 ## Storage and expiry
 
-Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under the inspectable `<config-dir>/telemetry/` data directory (default `~/.symposium/telemetry/`). Current cumulative hook, plugin-hook, and extension-invocation aggregates are JSON lines in `metrics-YYYY-MM-DD.jsonl`; the bounded snapshot is rewritten atomically after a merge. The lock in this directory also guards sibling private state. A process uses one non-waiting lock attempt and may drop its complete buffered event batch or aggregate observation rather than delay your hook or command. Recording failures never change the user operation's result.
+### Data files and recording
 
-The event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB daily allowance. The allowance is a safety ceiling, not expected volume or preallocation: it bounds damage from a producer bug or unexpectedly large resolution batch. Together with D31 expiry, it bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Aggregate metrics may use at most 512 KiB, so high-volume hook and skill activity cannot consume the allowance reserved for resolution and configuration events. A file is eligible for deletion only when `current_utc_day - file_utc_day > 30`: a D0 file remains throughout D30 and is first eligible on D31. Cleanup is lazy, so an old file remains until a recording-capable invocation or telemetry command runs.
+Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under the inspectable `<config-dir>/telemetry/` data directory (default `~/.symposium/telemetry/`). Current cumulative hook, plugin-hook, and extension-invocation aggregates are JSON lines in `metrics-YYYY-MM-DD.jsonl`. Symposium rewrites this bounded snapshot atomically after a merge.
 
-The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, current identifier-window and return-cohort anchors, cleanup and marker metadata, bounded keyed session sets, and snapshot contribution counts used to calculate complete distinct-session counts. It is atomically created and replaced with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock. The sets are not printed or copied into metric rows, are discarded at UTC-day rollover, and are removed by `telemetry clear` or `telemetry reset-identifiers`. State is atomically replaced before the corresponding metric snapshot; if a later snapshot write fails, a contribution-count mismatch on the next update discards the sets and permanently marks the row's session counts incomplete for that day. `telemetry clear` deletes event and aggregate-metric files and atomically rewrites private state to remove pending sets, while preserving the identity key and current anchors. `telemetry reset-identifiers` rotates future identifiers and starts a new retention cohort. `telemetry disable` stops recording; existing files remain unless its interactive clear offer is accepted or `telemetry clear` removes them later.
+The lock in the telemetry directory also guards sibling private state. A recorder makes one non-waiting lock attempt. It may drop a complete buffered event batch or aggregate observation rather than delay your hook or command. Recording failures never change the user operation's result.
+
+### Daily limits and retention
+
+The event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB daily allowance. This allowance is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch.
+
+Aggregate metrics may use at most 512 KiB, so high-volume hook and skill activity cannot consume the allowance reserved for resolution and configuration events.
+
+A file is eligible for deletion only when `current_utc_day - file_utc_day > 30`. A D0 file remains throughout D30 and is first eligible on D31. Together with D31 expiry, the daily limit bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Cleanup is lazy, so an old file remains until a recording-capable invocation or telemetry command runs.
+
+### Private state
+
+The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, current identifier-window and return-cohort anchors, cleanup and marker metadata, bounded keyed session sets, and snapshot contribution counts used to calculate complete distinct-session counts.
+
+Symposium creates and replaces it atomically with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
+
+The session sets are not printed or copied into metric rows. Symposium discards them at UTC-day rollover and removes them when `telemetry clear` or `telemetry reset-identifiers` runs. State is replaced before the corresponding metric snapshot. If a later snapshot write fails, a contribution-count mismatch on the next update discards the sets and permanently marks the row's session counts incomplete for that day.
+
+`telemetry clear` deletes event and aggregate-metric files and rewrites private state to remove pending sets while preserving the identity key and current anchors. `telemetry reset-identifiers` rotates future identifiers and starts a new retention cohort. `telemetry disable` stops recording; existing files remain unless the user accepts its interactive clear offer or runs `telemetry clear` later.
+
+### Installation index
 
 The generated `<agent-skills-parent>/.symposium/index-v1.json` file is installation state, not telemetry. It may contain local agent-facing identifiers, installed-directory fingerprints, eligibility, and safe public attribution needed to identify the skill Symposium installed. It is gitignored, atomically replaced after sync, excluded from `telemetry show` and `telemetry clear`, and not uploaded by this RFD.
 
-Public names/versions and exact counts can be identifying when they are unusual. Exact daily hook counts disclose approximate prompt/tool activity by surface, and extension-invocation rows disclose exact skill-attempt, completion, and failure counts. Lock contention, process termination, full files, and I/O failures can make the log incomplete. The records are therefore pseudonymous, locally associated, and best-effort; they must not be described as anonymous or as proof that an unrecorded action did not happen.
+### Limits of interpretation
+
+Public names, versions, and exact counts can be identifying when they are unusual. Exact daily hook counts disclose approximate prompt/tool activity by surface. Extension-invocation rows disclose exact skill-attempt, completion, and failure counts.
+
+Lock contention, process termination, full files, and I/O failures can make the log incomplete. The records are therefore pseudonymous, locally associated, and best-effort. They must not be described as anonymous or as proof that an unrecorded action did not happen.
