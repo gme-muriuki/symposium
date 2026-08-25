@@ -85,6 +85,11 @@
     - [Goose](./design/agent-details/goose.md)
     - [Kiro](./design/agent-details/kiro.md)
     - [OpenCode](./design/agent-details/opencode.md)
+
+# Research
+
+- [Skill-effectiveness framework spike](./research/skill-effectiveness-framework-spike.md)
+
 - [RFDs](./rfds/README.md)
   - [Template](./rfds/TEMPLATE/README.md)
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
