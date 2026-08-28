@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "agents" ]; then
+    shift
+fi
+
+mkdir -p /workspace/.symposium
+printf 'cargo agents %s\n' "$*" >> /workspace/.symposium/invocations.log
+
+if [ "${1:-}" != "crate-info" ] || [ -z "${2:-}" ]; then
+    printf 'prototype cargo-agents only supports: cargo agents crate-info <NAME>\n' >&2
+    exit 2
+fi
+
+crate_name="$2"
+source_dir="$(find /opt/crates -mindepth 1 -maxdepth 1 -type d -name "${crate_name}-*" | sort -V | tail -n 1)"
+
+if [ -z "$source_dir" ]; then
+    printf 'crate source not found for %s\n' "$crate_name" >&2
+    exit 1
+fi
+
+printf 'Crate: %s\nSource: %s\n' "$crate_name" "$source_dir"

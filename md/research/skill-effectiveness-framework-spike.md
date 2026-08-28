@@ -1,6 +1,6 @@
 # Skill-effectiveness framework spike
 
-Status: implementation spike in progress; provider bridge verified, funded smoke pair blocked (2026-08-25)
+Status: handoff implementation complete; funded smoke and measured evidence pending (2026-08-28)
 
 This is a handoff specification for a disposable experiment. It is not an RFD and does not propose a stable Symposium interface.
 
@@ -127,8 +127,8 @@ Secrets and complete agent homes must not enter the normalized JSON result. Insp
 The disposable implementation lives under `prototypes/skill-effectiveness-eval/`:
 
 ```text
-experiment.toml       pinned conditions, phases, and budgets
-run.py                plan, control, execute, and summarize entry point
+experiment.toml       pinned conditions, phases, paths, and budgets
+run.py                prepare, plan, execute, normalize, and report entry point
 eval_task.py          Inspect task and scorers
 fixture/              files visible to the coding agent
 grader/known-good.md   grader-owned exact answer
@@ -136,6 +136,9 @@ bin/cargo              minimal command dispatcher used by the fixture
 bin/cargo-agents      capability-instrumentation shim
 Dockerfile            reproducible execution image
 compose.yaml          Inspect Docker sandbox configuration
+scripts/              pinned, resumable Claude Code downloader
+tests/                offline orchestration and result regressions
+README.md             linear takeover procedure
 NOTES.md               observations and framework-fit verdict
 ```
 
@@ -145,13 +148,16 @@ The default command must be safe and free:
 uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-effectiveness-eval/run.py plan
 ```
 
-The grader controls are also free and must pass before a provider run:
+The idempotent preparation command is free and must pass before a provider run:
 
 ```console
-uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-effectiveness-eval/run.py controls
+uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-effectiveness-eval/run.py prepare
 ```
 
-They run the untouched and known-good files through the same scorer in separate Docker sandboxes. Expected results are `I` and `C`, respectively.
+It verifies or downloads the pinned agent binary, then runs the untouched and
+known-good files through the same scorer in separate Docker sandboxes. Expected
+results are `I` and `C`. Paid commands require current fingerprinted evidence of
+those results.
 
 Paid phases are explicit:
 
@@ -162,33 +168,32 @@ uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-eff
 
 ## Handoff-completion design
 
-Before transferring the spike, the prototype will provide a checkout-to-smoke
-path with no undocumented setup:
+The prototype now provides a checkout-to-smoke path with no undocumented setup:
 
-1. A free, idempotent `prepare` command will verify Docker, build a minimal
+1. A free, idempotent `prepare` command verifies Docker, builds a minimal
    downloader image, populate Inspect SWE's user cache with the pinned Claude
    Code binary when necessary, verify its size and SHA-256, and run both grader
    controls. It will never read a provider key or contact a model API.
-2. The existing `plan` command will remain the non-mutating readiness view. Its
+2. The existing `plan` command remains the non-mutating readiness view. Its
    output will distinguish assets, local executables, credentials, and the
    unobservable funded-account requirement.
-3. Offline standard-library regression tests will cover deterministic pair
+3. Offline standard-library regression tests cover deterministic pair
    ordering, prerequisite-independent planning, billing/authentication/provider
    failure classification, terminal phase stopping, and portable result
    normalization. These tests will not require Docker or provider credentials.
-4. A free `report` command will turn normalized results into a Markdown evidence
+4. A free `report` command turns normalized results into a Markdown evidence
    report containing run status, scores, usage, timing, capability invocation,
    and pair deltas. It will state which smoke gates are supported by evidence but
    will not choose the framework verdict automatically.
-5. The README will reduce takeover to `prepare`, setting a funded API key,
+5. The README reduces takeover to `prepare`, setting a funded API key,
    `smoke --confirm-paid-run`, reviewing the generated report, and—only after the
    smoke gates pass—running `measured --confirm-paid-run`.
 
 The downloader cache and all Inspect logs remain outside version control. The
-wrapper must not print secrets, and the normalized result and report must omit
-messages, transcripts, and authentication material. A clean handoff commit will
-include only the research chapter, mdbook index, prototype source, fixtures,
-tests, and lockfile; unrelated working-tree files are excluded.
+wrapper does not print secrets, and the normalized result and report omit
+messages, transcripts, tracebacks, and authentication material. The handoff
+commit includes only the research chapter, prototype source, fixtures, tests,
+and lockfile; unrelated working-tree files are excluded.
 
 Completion of this local work does not manufacture experimental evidence. A
 funded smoke pair, the conditional measured pairs, and the final adoption verdict
@@ -264,6 +269,14 @@ On Windows with Docker Desktop 4.84.0 and Engine 29.6.2, the lightweight sandbox
 Cold setup was material. The current pinned Python environment contains 88 packages. An initial Rust-toolchain image was intentionally abandoned because compilation was outside the task and its 280 MB base layer downloaded too slowly. The replacement Debian image downloaded a 28 MB base layer and 24 MB of packages, then reused cached layers. Its base digest and crate archive checksum are pinned. The first two trivial control samples took approximately 1 minute 26 seconds and 2 minutes 17 seconds according to Inspect; a later cached run took 38 seconds and 1 minute 11 seconds and produced the same `I` and `C` scores.
 
 Inspect SWE's default five-second download timed out against the 339 MB Claude Code artifact. The prototype therefore caches a checksum-pinned Claude Code 2.1.238 binary and copies it into each Linux sandbox. With that workaround, attempt `smoke-20260825T130119Z` launched Claude Code and Inspect's provider bridge without patching either framework. Anthropic rejected both forwarded baseline requests with HTTP 400 because the API account had insufficient credit. Claude Code reported zero tokens and $0.00; the treatment was stopped before making a request. The exporter records this as `status: unavailable` with `error_kind: billing_error`.
+
+On 2026-08-28, the completed `prepare` path verified the cached binary and reran
+both controls end to end: untouched returned `I` and known-good returned `C`.
+The final fingerprinted run took 25 and 22 seconds. Fourteen offline regressions cover planning, binary
+verification and download orchestration, failure classification, phase stopping,
+control fingerprints, secret-minimized normalization, report gates, and pair
+deltas. The generated report correctly marks the retained billing-only attempt as
+not smoke-ready.
 
 The remaining blocker is funded Anthropic API access, not key discovery. Until a funded smoke pair completes, successful generation, nonzero usage accounting, treatment-skill delivery, and capability invocation remain unverified; no adoption verdict is justified.
 

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "agents" ]; then
+    exec cargo-agents "$@"
+fi
+
+printf 'prototype cargo only supports: cargo agents ...\n' >&2
+exit 2

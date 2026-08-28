@@ -1,0 +1,53 @@
+schema-version = 1
+
+[experiment]
+id = "find-crate-source-cargo-platform-v1"
+seed = 824315
+model = "anthropic/claude-sonnet-5"
+agent = "claude-code"
+agent-version = "2.1.238"
+task-version = 1
+skill = "find-crate-source"
+crate = "cargo-platform"
+crate-version = "0.3.3"
+skill-path = "../../.agents/skills/find-crate-source"
+fixture-path = "fixture"
+grader-path = "grader/known-good.md"
+sandbox-config = "compose.yaml"
+results-path = "artifacts/results.json"
+report-path = "artifacts/report.md"
+controls-path = "artifacts/controls.json"
+logs-path = "artifacts/logs"
+
+[conditions.baseline]
+skills = []
+
+[conditions.symposium]
+skills = ["find-crate-source"]
+
+[model-costs."anthropic/claude-sonnet-5"]
+input = 2.00
+output = 10.00
+input_cache_write = 4.00
+input_cache_read = 0.20
+
+[phases.smoke]
+pairs = 1
+
+[phases.measured]
+pairs = 3
+
+[limits]
+message-limit = 20
+token-limit = 26000
+output-token-limit = 1000
+time-limit-seconds = 600
+cost-limit-usd = 0.35
+experiment-cost-limit-usd = 3.00
+max-provider-requests = 4
+max-tool-calls = 3
+
+[agent-binary]
+cache-file = "claude-2.1.238-linux-x64"
+size = 338860336
+sha256 = "0933b286cf94e1b2504b35ac165ab76b8f822735d53371c56393988c23040d58"

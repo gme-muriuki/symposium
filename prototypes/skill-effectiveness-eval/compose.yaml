@@ -1,0 +1,33 @@
+services:
+  default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    command:
+      - sh
+      - -lc
+      - >-
+        mkdir -p /home/agent/.local/bin
+        && cp /opt/claude-source /home/agent/.local/bin/claude
+        && chmod 0755 /home/agent/.local/bin/claude
+        && exec sleep infinity
+    environment:
+      PATH: /home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      - type: bind
+        source: ${CLAUDE_CODE_BINARY_PATH:?CLAUDE_CODE_BINARY_PATH is required}
+        target: /opt/claude-source
+        read_only: true
+    healthcheck:
+      test: ["CMD", "test", "-x", "/home/agent/.local/bin/claude"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 1s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+          pids: 256
