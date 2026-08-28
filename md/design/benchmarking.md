@@ -1,0 +1,274 @@
+# Benchmarking
+
+The performance question for the initial benchmark suite is:
+
+> How much wall-clock time does Symposium's in-process `PreToolUse` pipeline take in an unchanged workspace, with minimal and representative local configurations?
+
+The first performance story answers that question with two in-process hook cases and two `WorkspaceDeps` component measurements. The component numbers make the hook results interpretable: they show the difference between resolving metadata and reusing Symposium's disk cache.
+
+The suite begins with this bounded story rather than attempting to benchmark every performance-sensitive path in the same change.
+
+## Goals
+
+The benchmark suite is organized so that:
+
+- each benchmark addition can be built, run, and understood independently;
+- the primary measurements represent the in-process portion of a user-visible operation;
+- component measurements explain important contributors to that operation;
+- fixtures and environment setup can be shared without hiding the operation being measured;
+- workloads are deterministic and cannot access the network;
+- benchmark names state the cache or workload conditions they control;
+- normal pull requests compile the suite, while measurements run separately;
+- performance gating is introduced only after a benchmark has a stable and useful history.
+
+The first story does not measure workspace-size scaling, `SessionStart`, real plugin hook subprocesses, remote registry refresh, networking, or every performance-sensitive module. Those require later, separately justified benchmark additions.
+
+## Organization
+
+The suite uses this layout:
+
+```text
+benches/
+|-- README.md
+|-- benchsuite/
+|   |-- Cargo.toml
+|   |-- src/
+|   |   `-- lib.rs
+|   `-- benches/
+|       |-- hook_dispatch.rs
+|       `-- workspace_deps.rs
+`-- fixtures/
+    `-- small-workspace/
+        |-- workspace/
+        |   |-- .cargo/
+        |   |   `-- config.toml
+        |   |-- Cargo.toml
+        |   |-- Cargo.lock
+        |   `-- crates/
+        `-- registry/
+            |-- always-active/
+            |-- predicate-gated/
+            `-- dormant/
+```
+
+`benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, and validating prepared workloads. Individual benchmark targets retain semantic ownership of their scenarios and timed operations.
+
+Each Criterion target is declared explicitly in the benchsuite manifest with `harness = false`. Shared support code does not wrap Criterion or define a universal benchmark framework. A target exposes Criterion's concepts directly so its measurement choices remain visible.
+
+`benches/fixtures` is separate from the runner package so future benchmark targets and performance tools can reuse its workloads.
+
+The root package sets `autobenches = false`, preventing Cargo from interpreting future paths under the top-level `benches` directory as benchmark targets of the `symposium` package. It also excludes `/benches` from the published package.
+`cargo package --list` verifies that benchmark-only files are absent from the crate archive.
+
+The fixture manifest is a virtual workspace and therefore defines its own workspace boundary. It does not need to be excluded from the parent workspace.
+
+## Benchmark contract
+
+Every benchmark target begins with a doc comment containing these fields:
+
+
+| Field           | Meaning                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| Claim           | The performance property the benchmark is intended to represent. |
+| Workload        | The fixture and inputs supplied to the code.                     |
+| Timed operation | The exact operation included in the measurement.                 |
+| Excluded setup  | Preparation deliberately kept outside the timer.                 |
+| Invariants      | Conditions checked to ensure the intended path is exercised.     |
+| Metric          | The quantity reported and its unit.                              |
+| Noise           | Known uncontrolled effects and interpretation limits.            |
+| Lifecycle       | `experimental`, `observed`, or `gated`.                          |
+
+
+The target's doc comment is the single source of truth because it is next to the code that can invalidate the contract. `benches/README.md` is an index of targets, commands, lifecycle states, and links to those contracts; it does not duplicate all eight fields.
+
+## Framework
+
+The initial suite uses [Criterion.rs](https://criterion-rs.github.io/book/). The performance story includes filesystem access and Cargo subprocesses, so wall-clock measurement and statistical sampling are appropriate. A callgrind-based instruction counter would not represent the latency of those external operations. It may still be useful for a later CPU-bound benchmark.
+
+The implementation uses `std::hint::black_box` for both values passed from Criterion setup into a timed closure and results returned by the timed operation. Fixture preparation, cache-state construction, runtime construction, and correctness assertions remain outside the timer.
+
+## Hook cases: unchanged workspace
+
+The hook target contains two cases:
+
+
+| Case                                        | Configuration                                                            | Interpretation                                                                                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `hook_dispatch/pre_tool_use_minimal_config` | Both builtin registries disabled and no configured plugins               | The fixed in-process pipeline and Cargo-subprocess floor.                                                                           |
+| `hook_dispatch/pre_tool_use_local_registry` | Builtin registries disabled and one small local path registry configured | The headline case: fixed overhead plus deterministic registry loading, activation gating, hook selection, and predicate evaluation. |
+
+
+Their shared contract is:
+
+
+| Field           | Definition                                                                                                                                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claim           | Wall-clock latency of Symposium's in-process `PreToolUse` pipeline in an unchanged Cargo workspace, at its minimal floor and with a representative local registry.                                                                                      |
+| Workload        | A simulated agent event in the checked-in fixture, with default auto-sync enabled, fresh workspace state, and a valid `WorkspaceDeps` disk cache. The local-registry case loads the fixture's three plugins.                                            |
+| Timed operation | Input parsing, auto-sync freshness decision, built-in dispatch, registry and workspace-plugin loading, plugin activation, hook selection, predicate evaluation, and output serialization.                                                               |
+| Excluded setup  | Fixture copy, `Symposium` construction, Tokio runtime construction, initial cache population, workspace-state preparation, and invariant checks. CLI startup, configuration parsing, registry refresh, stdin/stdout, and terminal I/O are not measured. |
+| Invariants      | The workspace state and dependency cache are valid; metadata and network access are not attempted; no external plugin process runs; the expected successful hook output is produced.                                                                    |
+| Metric          | Wall-clock time per in-process hook dispatch.                                                                                                                                                                                                           |
+| Noise           | Cargo subprocess startup, filesystem and operating-system caches, process scheduling, shared-runner hardware, and developer-level Cargo configuration during local runs.                                                                                |
+| Lifecycle       | `experimental`.                                                                                                                                                                                                                                         |
+
+
+The local registry has three fixed entries:
+
+- `always-active` uses the explicit `depends-on = "*"` gate and exercises the active-plugin path;
+- `predicate-gated` has a `PreToolUse` hook gated by `path_exists(.symposium-benchmark-never-present)`; setup asserts that path is absent, so hook selection and predicate evaluation run without spawning its otherwise-valid command;
+- `dormant` has no inferred or explicit activation gate and therefore exercises the dormant-plugin path.
+
+The benchmark package calls the public `symposium::hook::execute_hook` API directly rather than depending on `symposium-testlib`. This follows the same simulation seam as the test harness while keeping the benchmark package's support code focused.
+
+In the current implementation, the unchanged-workspace path executes `cargo locate-project` once during the auto-sync freshness check and again when the new `WorkspaceDeps` resolves its disk cache. These are identical subprocesses with identical arguments and working directory. The cases make that floor visible and will register a change if the flow later reuses the workspace root or otherwise removes one lookup. That optimization follows the benchmark addition rather than being bundled into it.
+
+## Component cases: `WorkspaceDeps`
+
+The initial component target has two cases:
+
+
+| Case                                         | Prepared state                                     | Timed operation                                                                                       | Interpretation                                                                                                                                      |
+| -------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_deps/symposium_cache_miss`        | Empty Symposium workspace cache and a new resolver | `WorkspaceDeps::load()`, including workspace lookup, Cargo metadata, and cache write-through          | Quantifies the work avoided by a valid Symposium cache. Most time belongs to Cargo rather than Symposium.                                           |
+| `workspace_deps/new_resolver_disk_cache_hit` | Valid disk cache and a new resolver                | `WorkspaceDeps::load()`, including workspace lookup, cache validation, file read, and deserialization | Quantifies the component cost paid by each new resolver when the cache is valid. It is normally dominated by the `cargo locate-project` subprocess. |
+
+
+The first case is called a *Symposium cache miss*, not a *cold load*. Criterion repeats work on one machine, so the operating system's filesystem cache and the Cargo executable may already be warm. The harness controls Symposium's cache state, not the complete machine state.
+
+The cases may use different Criterion measurement settings. The subprocess case needs fewer, longer samples than an in-process CPU benchmark.
+
+There is no `memory_cache_hit` performance case. Once initialized, `WorkspaceDeps::load()` primarily measures `OnceLock` and `Option::as_ref`, not a meaningful user-visible Symposium operation. The memoization invariant is protected by a correctness test instead.
+
+There is also no direct `try_disk_cache` benchmark in the initial story. That function is private, and exposing an implementation detail solely to measure a microsecond-scale parse is not justified while workspace lookup dominates the user-visible disk-hit path. A direct parsing benchmark can be added if cache size or profiling later shows serialization to be material.
+
+### Fixture
+
+The checked-in `small-workspace` fixture contains a virtual Cargo workspace and the three-entry local plugin registry used by the representative hook case. The workspace has two members and three local path dependencies. One dependency is shared by both members. The dependency packages are excluded from fixture workspace membership, and a `Cargo.lock` is committed. This produces a small but nontrivial direct dependency graph.
+
+The fixture contains `.cargo/config.toml` with Cargo offline mode enabled. Path dependencies and a committed lockfile avoid registry resolution; the Cargo configuration enforces the no-network invariant rather than relying on that layout by convention.
+
+The local-registry configuration points at the copied `registry` directory with a sandbox-relative path. The minimal configuration leaves that same directory unconfigured. Both disable the builtin recommendations and user-plugin registries, so neither case depends on mutable user or remote content.
+
+The fixture represents one small project and registry, not a workspace-size or plugin-count scaling curve. Larger or generated fixtures require a separate benchmark claim.
+
+Each benchmark run copies the fixture into an isolated sandbox. The sandbox also contains dedicated Symposium configuration and cache directories, so a run cannot read or modify the developer's normal Symposium state.
+
+The initial harness does not change the benchmark process's `CARGO_HOME`. Process-wide environment mutation is unsafe once other threads may exist, and the production resolver has no per-command Cargo-environment seam. CI provides an ephemeral Cargo home; local runs may still be influenced by user-level Cargo configuration. The fixture-local offline setting enforces the important no-network property, and the remaining local configuration is recorded as noise rather than expanding production APIs solely for the benchmark.
+
+### Setup and data flow
+
+For `symposium_cache_miss`, per-iteration setup removes only the sandbox's workspace cache and constructs a new resolver. Criterion's per-iteration setup runs outside the timer. The timed load recreates the cache.
+
+For `new_resolver_disk_cache_hit`, setup loads the workspace once and verifies that the cache file exists. Each measured iteration receives a new resolver pointed at that cache, so its in-memory `OnceLock` is empty while the disk cache is valid.
+
+Before measurement, an untimed preflight uses a mock Cargo executable that forwards `locate-project` but rejects `metadata`. A successful load therefore proves that the disk cache was used. Timed samples switch back to the real Cargo executable so the wrapper does not add another shell process to the result.
+
+The harness also validates the workspace root, the expected two members, the expected three dependencies, and the required cache state.
+
+`WorkspaceDeps` records `Cargo.lock` modification times with whole-second granularity. The fixture lockfile is immutable during a benchmark run. Future benchmarks that modify it must account for that granularity rather than assume an immediate timestamp change will invalidate the cache.
+
+## Failures and correctness checks
+
+Shared fixture helpers return errors with the fixture, workspace, or cache path needed to diagnose the failure. The benchmark executable reports the error and stops. A setup failure or `WorkspaceDeps::load()` returning `None` must never be converted into a timing sample.
+
+The benchsuite library has unit tests for fixture discovery, copying, sandbox preparation, and its benchmark-specific mock-Cargo preflight helper. Cache behavior belongs to the main crate and is tested in `tests/workspace_cache.rs` with `symposium-testlib`'s existing cross-platform mock-Cargo support:
+
+1. The first cache-miss load invokes `locate-project` and `metadata` once each; repeated loads through that resolver invoke neither again.
+2. A new resolver with a valid disk cache can invoke `locate-project` but must not invoke `metadata`.
+
+The wrapper is never part of a timed sample.
+
+Criterion targets support a fast smoke run through:
+
+```text
+cargo test -p symposium-benchsuite --benches
+```
+
+Smoke runs execute workloads without collecting full measurements. Normal pull request CI compiles benchmark targets and runs the small support-library and cache-invariant tests. Full smoke and measurement runs belong to the benchmark workflow.
+
+## Commands
+
+The operator guide records the authoritative commands. The initial interface is:
+
+```text
+cargo check -p symposium-benchsuite --benches
+cargo test -p symposium-benchsuite --lib
+cargo test -p symposium-benchsuite --benches
+cargo bench -p symposium-benchsuite --bench workspace_deps
+cargo bench -p symposium-benchsuite --bench hook_dispatch
+```
+
+Criterion filters allow an individual group or case to run without executing unrelated benchmark additions.
+
+## CI and result lifecycle
+
+Normal pull request CI runs `cargo check -p symposium-benchsuite --benches` on native Linux, macOS, and Windows jobs. The musl cross-compilation job is not part of the initial benchmark check. Support-library and cache-invariant tests run as ordinary correctness tests.
+
+A separate measurement workflow runs:
+
+- on manual dispatch for a chosen ref;
+- on pull requests that change benchmark code or a path participating in the measured flows, including the benchmark workflow file itself.
+
+The initial path filter covers `benches/**`, the root Cargo manifests, `.github/workflows/benchmarks.yml`, and the relevant configuration, hook, workspace-state, plugin, predicate, directory, and package-manager modules under `src`. It does not include `src/skills.rs`, which the measured hook path does not execute.
+
+There is no weekly schedule initially. A scheduled job is added only when its results have a durable consumer or a named maintainer responsible for reviewing them. Until then, a recurring artifact would be write-only storage.
+
+The measurement workflow uses `ubuntu-24.04` and names an exact Rust toolchain version rather than the moving `stable` alias. Changing either is an explicit benchmark-environment change and resets historical comparability. Each run records the commit SHA, Rust and Cargo versions, operating-system details, and available CPU information.
+
+Headline estimates are written to the Actions job summary so the person who triggered a run can read them without downloading an archive. Criterion's full result directory is uploaded as an expiring artifact only for post-hoc inspection. General build caches must not implicitly supply an unnamed Criterion baseline; otherwise the displayed comparison can refer to an unrelated run.
+
+The initial workflow does not fail because of a measured slowdown and is not a required merge gate. Compilation failures, setup failures, and benchmark crashes remain visible failures rather than being hidden with `continue-on-error`.
+
+Benchmarks move through three lifecycle states:
+
+```text
+experimental -> observed -> gated
+```
+
+- **Experimental to observed:** the workload contract is unchanged across six consecutive successful runs using the same runner image and exact toolchain; a maintainer reviews the results; and `(maximum median - minimum median) / median of the six medians` is at most 10%.
+- **Observed to gated:** a named owner agrees to triage failures; at least 20 paired no-change base/head comparisons run in the intended comparison environment; the 95th percentile absolute paired difference is at most 3%; and the regression threshold is no smaller than twice that measured noise.
+
+A benchmark that does not meet these conditions remains in its current state. The numbers are initial operating criteria and can be revised explicitly when collected data demonstrates that a different definition is more useful.
+
+All initial benchmarks start as experimental. Shared GitHub-hosted hardware may never be stable enough for gating even with a fixed image and toolchain; gating can therefore require paired execution on a controlled runner or dedicated hardware.
+
+## Incremental delivery
+
+The first pull request is built as independently working additions:
+
+1. root-package safeguards, the benchsuite workspace package, and the operator README;
+2. shared fixture and sandbox support with unit tests;
+3. cache-behavior correctness tests;
+4. the Symposium-cache-miss component case;
+5. the new-resolver disk-cache-hit component case;
+6. the minimal and local-registry unchanged-workspace `PreToolUse` cases;
+7. CI workflows and final documentation updates.
+
+Each addition compiles and has one stated purpose before the next is introduced. Implementation findings can revise this design when the code exposes a misleading workload or unnecessary abstraction.
+
+## Direct precedents
+
+Four projects directly inform decisions in this design:
+
+- [Cargo](https://doc.crates.io/contrib/tests/profiling.html) uses a dedicated benchsuite with common fixture support and independently selectable targets.
+- [rustc-perf](https://github.com/rust-lang/rustc-perf) separates collection from presentation and classifies workloads by stability and importance.
+- [rustls](https://github.com/rustls/rustls/blob/main/BENCHMARKING.md) separates benchmark layers and uses history before deriving regression significance.
+- Serde's separate [JSON benchmark repository](https://github.com/serde-rs/json-benchmark) is archived, illustrating the maintenance risk of separating core benchmarks from the project that owns them.
+
+## Research appendix
+
+The broader ecosystem survey informed the benchmark contract and the boundary between focused in-repository measurements and possible future system suites:
+
+
+| Project                                                                                                                                                 | Relevant lesson                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [Tokio](https://github.com/tokio-rs/tokio/tree/master/benches)                                                                                          | Group focused targets by subsystem; state when a case is a regression sentinel rather than a real-world workload.     |
+| [ripgrep](https://github.com/BurntSushi/ripgrep/tree/master/benchsuite)                                                                                 | Treat corpora, command equivalence, warmup, raw results, and output validation as part of the workload definition.    |
+| [rebar](https://github.com/BurntSushi/rebar)                                                                                                            | Separate workload definitions, adapters, shared data, methodology, and recorded results in a large comparative suite. |
+| [Polars](https://github.com/pola-rs/polars-benchmark)                                                                                                   | Keep datasets, expected answers, query definitions, and execution scripts together for system-level scenarios.        |
+| [Tantivy](https://github.com/quickwit-oss/tantivy/tree/main/benches) and [search-benchmark-game](https://github.com/quickwit-oss/search-benchmark-game) | Keep focused component benchmarks in-repository and move large cross-engine workloads to a purpose-built suite.       |
+| [bstr](https://github.com/BurntSushi/bstr/tree/master/bench)                                                                                            | Treat representative input corpora as first-class benchmark data.                                                     |
+
+
+These projects support two layers: bounded component and workflow benchmarks in this repository now, and specialized product-scale scenarios only when a specific future workload justifies them.
