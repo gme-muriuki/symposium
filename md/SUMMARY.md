@@ -89,6 +89,7 @@
 # Research
 
 - [Skill-effectiveness framework spike](./research/skill-effectiveness-framework-spike.md)
+- [Skill-evaluation prototype Python refactor](./research/skill-evaluation-python-refactor.md)
 
 - [RFDs](./rfds/README.md)
   - [Template](./rfds/TEMPLATE/README.md)
