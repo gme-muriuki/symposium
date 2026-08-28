@@ -5,8 +5,9 @@
 This prototype compares the same Claude Code source-inspection task with and
 without the repository's `find-crate-source` skill. The task edits Markdown; it
 does not compile or test Rust code. Inspect owns agent execution, sandbox
-lifecycle, limits, native logs, and scoring. `run.py` supplies paired scheduling,
-guarded execution, normalized results, and an evidence report.
+lifecycle, limits, native logs, and scoring. `run.py` is a stable executable shim;
+the typed `skill_eval` package supplies paired scheduling, cumulative budget
+protection, guarded execution, normalized results, and an evidence report.
 
 The full handoff specification is in [the mdbook research chapter](../../md/research/skill-effectiveness-framework-spike.md).
 
@@ -28,6 +29,11 @@ and known-good grader controls. It writes fingerprinted control evidence under
 the ignored `artifacts/` directory. A paid run is refused when that evidence is
 missing, failed, or stale because a graded input changed.
 
+If Docker reports `x509: certificate signed by unknown authority` while pulling
+the base image or downloading the pinned crate, install the organization or
+proxy root CA in Docker's builder and container trust stores, restart Docker,
+and rerun `prepare`. Do not bypass TLS or remove the checksum checks.
+
 Inspect readiness without making a provider request:
 
 ```console
@@ -37,7 +43,8 @@ uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-eff
 Planning prints both conditions, validates local assets and controls, and reports
 Docker, binary, and key availability. It deliberately reports API account funding
 as unverified because Anthropic exposes insufficient credit only in a provider
-response.
+response. It also reports observed spend, unresolved reservations, and remaining
+experiment budget from the ignored `artifacts/budget.json` ledger.
 
 Set `ANTHROPIC_API_KEY` in the shell from a funded Claude Platform workspace, then
 run only the smoke pair:
@@ -48,7 +55,10 @@ uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-eff
 
 The declared maximum is $0.70: two conditions at $0.35 each. The wrapper disables
 automatic paid retries and stops the phase after a terminal credential, billing,
-provider, framework, or agent failure.
+provider, framework, or agent failure. Before contacting the provider it reserves
+the complete phase maximum against the $3.00 experiment ceiling. Completed runs
+replace their reservation with observed cost; unlaunched runs are cancelled after
+a handled terminal failure.
 
 Render the portable evidence report:
 
@@ -88,7 +98,15 @@ uv run --project prototypes/skill-effectiveness-eval python prototypes/skill-eff
 Run the offline regression suite:
 
 ```console
-uv run --project prototypes/skill-effectiveness-eval python -m unittest discover -s prototypes/skill-effectiveness-eval/tests -v
+uv run --project prototypes/skill-effectiveness-eval pytest prototypes/skill-effectiveness-eval/tests
+```
+
+Run the Python quality checks:
+
+```console
+uv run --project prototypes/skill-effectiveness-eval ruff format --check prototypes/skill-effectiveness-eval
+uv run --project prototypes/skill-effectiveness-eval ruff check prototypes/skill-effectiveness-eval
+uv run --project prototypes/skill-effectiveness-eval mypy prototypes/skill-effectiveness-eval/skill_eval
 ```
 
 ## Safety and artifacts
@@ -101,6 +119,12 @@ If a run ends because credentials or billing are unavailable, the wrapper stops
 the phase before launching the other condition. `summarize` records the run as
 `status: unavailable` and distinguishes `billing_error` from
 `authentication_error` in `error_kind`.
+
+An unexpected process interruption deliberately leaves its reservations active.
+Run `summarize` and then `plan`: any completed Inspect logs are reconciled into
+observed cost, while a reservation with no retained result remains blocked for
+manual investigation. Do not delete the ledger merely to make another paid run
+possible.
 
 Inspect's `.eval` logs may contain full transcripts and should remain local.
 `artifacts/`, `.venv/`, and caches are ignored. The normalized JSON retains only

@@ -45,12 +45,22 @@ before it could contact the provider. The normalized exporter classifies this as
 `status: unavailable` and `error_kind: billing_error`; the paired runner now stops
 after any terminal infrastructure, credential, or billing failure.
 
-The Python adapter currently contains 214 physical lines for task construction,
-skill intervention, controls, and scorers, plus 907 lines for preparation,
-planning, guarded execution, control evidence, failure classification, normalized
-export, and Markdown reporting. Its 14 offline regression tests occupy 329 lines.
-This is evidence that the project-specific wrapper is substantial, not an
-optimized implementation-size claim.
+The Python adapter now contains 2,233 physical lines across ten focused package
+modules for typed configuration, planning, cumulative budget accounting,
+preparation, task construction, execution, normalization, and reporting. Its 24
+offline regressions occupy 525 lines. Ruff formatting and linting plus strict mypy
+checks define the handoff quality floor. This remains evidence that the
+project-specific wrapper is substantial, not an optimized implementation-size
+claim.
+
+The post-refactor preparation attempt verified the cached agent binary and
+reached Docker image construction, which caught and fixed missing binary-path
+wiring, generated-cache exclusions, and versioned partial-file assembly. The
+current host then stopped at the pinned crates.io download because its
+container trust store does not contain the local TLS interception certificate.
+No provider call was made. The free controls therefore need one refresh on a
+Docker installation with the required root CA before a paid handoff run; the
+earlier `I`/`C` evidence remains the last completed end-to-end observation.
 
 | Need | Inspect provides | Symposium glue | Missing or unverified |
 |---|---|---|---|
@@ -60,7 +70,7 @@ optimized implementation-size claim.
 | Token, cost, and duration accounting | Inspect logs sample usage and timing and supports limits. | Supply model prices, export the fields used by Symposium comparisons, and add a request-count filter. | Zero-usage billing rejection agrees between the bridge and Claude Code; nonzero accounting remains unverified. |
 | Paired baseline/treatment scheduling | Tasks, samples, and logs are available. | Pair labels, deterministic order shuffling, and the skill intervention. | Inspect has no first-class paired-experiment abstraction. |
 | Skill and plugin-use evidence | Inspect SWE accepts skills; sandbox artifacts are scorer-readable. | Instrument `cargo agents`, score exact invocations, and count tool events. | Structured skill-load telemetry is not established. Inspect SWE has no hard built-in-tool-call count limit. |
-| Repetition and failure retention | Repeated evaluations and native logs are supported. | Preserve attempt and pair identity, prohibit paid automatic retries, classify failures, and stop a phase on terminal errors. | Retrying interrupted attempts within one cumulative budget is not implemented. |
+| Repetition and failure retention | Repeated evaluations and native logs are supported. | Preserve attempt and pair identity, prohibit paid automatic retries, classify failures, stop on terminal errors, and reserve every attempt in a cumulative local budget. | An interrupted reservation without a retained result remains blocked for manual investigation. |
 | Portable result export | Inspect exposes a log-reading API. | Emit secret-minimized `results.json` and a Markdown gate/delta report. | A real billing failure normalized correctly; successful usage and capability evidence remain unverified. |
 | Local developer ergonomics | Inspect installs through Python tooling and uses Docker Compose. | Provide one idempotent `prepare` command, readiness plan, guarded phases, and report. | Cold setup remains heavy; Docker Desktop must already be running. |
 

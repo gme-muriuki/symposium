@@ -17,6 +17,7 @@ sandbox-config = "compose.yaml"
 results-path = "artifacts/results.json"
 report-path = "artifacts/report.md"
 controls-path = "artifacts/controls.json"
+budget-path = "artifacts/budget.json"
 logs-path = "artifacts/logs"
 
 [conditions.baseline]

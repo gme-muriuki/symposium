@@ -1,6 +1,6 @@
 # Skill-evaluation prototype Python refactor
 
-Status: approved design; implementation pending (2026-08-28)
+Status: implemented and offline-verified; free control refresh pending (2026-08-28)
 
 This document describes a focused maintainability and correctness refactor of
 the disposable skill-effectiveness evaluation prototype. It does not change the

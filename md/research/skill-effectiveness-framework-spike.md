@@ -128,8 +128,9 @@ The disposable implementation lives under `prototypes/skill-effectiveness-eval/`
 
 ```text
 experiment.toml       pinned conditions, phases, paths, and budgets
-run.py                prepare, plan, execute, normalize, and report entry point
-eval_task.py          Inspect task and scorers
+run.py                stable executable shim
+skill_eval/           typed planning, preparation, execution, results, and report package
+eval_task.py          compatibility imports for Inspect task builders
 fixture/              files visible to the coding agent
 grader/known-good.md   grader-owned exact answer
 bin/cargo              minimal command dispatcher used by the fixture
@@ -177,10 +178,11 @@ The prototype now provides a checkout-to-smoke path with no undocumented setup:
 2. The existing `plan` command remains the non-mutating readiness view. Its
    output will distinguish assets, local executables, credentials, and the
    unobservable funded-account requirement.
-3. Offline standard-library regression tests cover deterministic pair
-   ordering, prerequisite-independent planning, billing/authentication/provider
-   failure classification, terminal phase stopping, and portable result
-   normalization. These tests will not require Docker or provider credentials.
+3. Offline pytest regressions cover typed configuration, deterministic pair
+   ordering, prerequisite-independent planning, scoped process state, cumulative
+   budget transitions, billing/authentication/provider failure classification,
+   terminal phase stopping, portable result normalization, and report deltas.
+   These tests do not require Docker or provider credentials.
 4. A free `report` command turns normalized results into a Markdown evidence
    report containing run status, scores, usage, timing, capability invocation,
    and pair deltas. It will state which smoke gates are supported by evidence but
@@ -272,11 +274,12 @@ Inspect SWE's default five-second download timed out against the 339 MB Claude C
 
 On 2026-08-28, the completed `prepare` path verified the cached binary and reran
 both controls end to end: untouched returned `I` and known-good returned `C`.
-The final fingerprinted run took 25 and 22 seconds. Fourteen offline regressions cover planning, binary
-verification and download orchestration, failure classification, phase stopping,
-control fingerprints, secret-minimized normalization, report gates, and pair
-deltas. The generated report correctly marks the retained billing-only attempt as
-not smoke-ready.
+The final pre-refactor fingerprinted run took 25 and 22 seconds. The refactored
+suite has 24 offline regressions covering typed configuration, planning, binary
+verification and download orchestration, scoped process state, cumulative budget
+accounting, failure classification, phase stopping, control fingerprints,
+secret-minimized normalization, report gates, and pair deltas. The generated
+report correctly marks the retained billing-only attempt as not smoke-ready.
 
 The remaining blocker is funded Anthropic API access, not key discovery. Until a funded smoke pair completes, successful generation, nonzero usage accounting, treatment-skill delivery, and capability invocation remain unverified; no adoption verdict is justified.
 

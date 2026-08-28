@@ -2,14 +2,15 @@
 set -eu
 
 cache_dir="${1:-/cache}"
-version="2.1.238"
+version="$2"
+cache_file="$3"
+expected_size="$4"
+expected_hash="$5"
 platform="linux-x64"
 url="https://downloads.claude.ai/claude-code-releases/$version/$platform/claude"
-expected_size=338860336
-expected_hash="0933b286cf94e1b2504b35ac165ab76b8f822735d53371c56393988c23040d58"
 part_count=8
 chunk_size=$(( (expected_size + part_count - 1) / part_count ))
-target="$cache_dir/claude-$version-$platform"
+target="$cache_dir/$cache_file"
 
 download_part() {
     index="$1"
@@ -19,7 +20,7 @@ download_part() {
         end=$((expected_size - 1))
     fi
 
-    part="$cache_dir/claude.part.$index"
+    part="$cache_dir/$cache_file.part.$index"
     expected_part_size=$((end - start + 1))
     existing_size=0
     if [ -f "$part" ]; then
@@ -75,7 +76,7 @@ assembled="$target.parallel"
 : > "$assembled"
 index=0
 while [ "$index" -lt "$part_count" ]; do
-    cat "$cache_dir/claude.part.$index" >> "$assembled"
+    cat "$cache_dir/$cache_file.part.$index" >> "$assembled"
     index=$((index + 1))
 done
 
@@ -92,5 +93,5 @@ if [ "$actual_hash" != "$expected_hash" ]; then
 fi
 
 mv "$assembled" "$target"
-rm -f "$cache_dir"/claude.part.*
+rm -f "$cache_dir/$cache_file".part.*
 printf 'cached claude-code %s %s bytes=%s\n' "$version" "$platform" "$actual_size"
