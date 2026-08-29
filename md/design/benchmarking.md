@@ -188,6 +188,7 @@ The benchsuite library has unit tests for fixture discovery, copying, sandbox pr
 
 1. The first cache-miss load invokes `locate-project` and `metadata` once each; repeated loads through that resolver invoke neither again.
 2. A new resolver with a valid disk cache can invoke `locate-project` but must not invoke `metadata`.
+3. Advancing `Cargo.lock`'s modification time by one full second invalidates the disk cache and makes a new resolver invoke `metadata` again. The test sets the timestamp explicitly rather than sleeping or relying on filesystem timing.
 
 The wrapper is never part of a timed sample.
 
