@@ -1,7 +1,10 @@
 //! Shared fixture and sandbox support for Symposium benchmarks.
 
-use anyhow::{Result, ensure};
-use std::path::{Path, PathBuf};
+use anyhow::{Context, Result, bail, ensure};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug)]
 pub enum Fixture {
@@ -23,11 +26,61 @@ impl Fixture {
         Ok(path)
     }
 
+    pub fn copy_to(&self, destination: impl AsRef<Path>) -> Result<()> {
+        let source = self.source_dir()?;
+        copy_directory(&source, destination.as_ref())
+    }
+
     fn directory_name(&self) -> &'static str {
         match self {
             Self::ReferenceProject => "reference-project",
             Self::LocalRegistry => "local-registry",
         }
+    }
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir(destination).with_context(|| {
+        format!(
+            "creating fixture destination directory `{}`",
+            destination.display()
+        )
+    })?;
+
+    for entry in source
+        .read_dir()
+        .with_context(|| format!("reading fixture directory `{}`", source.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading an entry in `{}`", source.display()))?;
+        copy_entry(&entry, destination)?;
+    }
+
+    Ok(())
+}
+
+fn copy_entry(entry: &fs::DirEntry, destination_directory: &Path) -> Result<()> {
+    let source = entry.path();
+    let destination = destination_directory.join(entry.file_name());
+    let file_type = entry
+        .file_type()
+        .with_context(|| format!("reading file type for `{}`", source.display()))?;
+
+    if file_type.is_dir() {
+        copy_directory(&source, &destination)
+    } else if file_type.is_file() {
+        fs::copy(&source, &destination).with_context(|| {
+            format!(
+                "copying fixture file `{}` to `{}`",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        Ok(())
+    } else {
+        bail!(
+            "fixture contains an unsupported filesystem entry: {}",
+            source.display()
+        )
     }
 }
 
@@ -41,6 +94,7 @@ fn fixtures_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn finds_reference_project_fixture() -> Result<()> {
@@ -66,6 +120,38 @@ mod tests {
             "local registry anchor manifest is missing: {}",
             manifest.display()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn copies_reference_project_fixture() -> Result<()> {
+        let temporary_directory = tempdir()?;
+        let destination = temporary_directory.path().join("reference-project");
+
+        Fixture::ReferenceProject.copy_to(&destination)?;
+
+        assert!(destination.join("Cargo.toml").is_file());
+        assert!(destination.join("domain/src/lib.rs").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_merge_into_an_existing_destination() -> Result<()> {
+        let temporary_directory = tempdir()?;
+        let destination = temporary_directory.path().join("reference-project");
+        let sentinel = destination.join("sentinel");
+
+        fs::create_dir(&destination)?;
+        fs::write(&sentinel, "leave me untouched")?;
+
+        Fixture::ReferenceProject
+            .copy_to(&destination)
+            .expect_err("copying into an existing destination must fail");
+
+        assert_eq!(fs::read_to_string(sentinel)?, "leave me untouched");
+        assert!(!destination.join("Cargo.toml").try_exists()?);
 
         Ok(())
     }
