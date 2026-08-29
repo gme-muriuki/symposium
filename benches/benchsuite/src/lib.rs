@@ -5,6 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tempfile::{Builder, TempDir};
 
 #[derive(Debug)]
 pub enum Fixture {
@@ -36,6 +37,56 @@ impl Fixture {
             Self::ReferenceProject => "reference-project",
             Self::LocalRegistry => "local-registry",
         }
+    }
+}
+
+/// Isolated filesystem state for a benchmark workload.
+#[derive(Debug)]
+pub struct Sandbox {
+    root: TempDir,
+    config_dir: PathBuf,
+    cache_dir: PathBuf,
+}
+
+impl Sandbox {
+    pub fn new() -> Result<Self> {
+        let root = Builder::new()
+            .prefix("symposium-benchmark-")
+            .tempdir()
+            .context("creating benchmark sandbox")?;
+        let config_dir = root.path().join("symposium-home");
+        let cache_dir = config_dir.join("cache");
+
+        fs::create_dir_all(&cache_dir).with_context(|| {
+            format!(
+                "creating benchmark sandbox directories under `{}`",
+                root.path().display()
+            )
+        })?;
+
+        Ok(Self {
+            root,
+            config_dir,
+            cache_dir,
+        })
+    }
+
+    pub fn stage_fixture(&self, fixture: &Fixture) -> Result<PathBuf> {
+        let destination = self.root().join(fixture.directory_name());
+        fixture.copy_to(&destination)?;
+        Ok(destination)
+    }
+
+    pub fn root(&self) -> &Path {
+        self.root.path()
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
     }
 }
 
@@ -152,6 +203,44 @@ mod tests {
 
         assert_eq!(fs::read_to_string(sentinel)?, "leave me untouched");
         assert!(!destination.join("Cargo.toml").try_exists()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn creates_isolated_sandbox_directories() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+
+        assert!(sandbox.root().is_dir());
+        assert!(sandbox.config_dir().is_dir());
+        assert!(sandbox.cache_dir().is_dir());
+        assert_eq!(sandbox.config_dir().parent(), Some(sandbox.root()));
+        assert_eq!(sandbox.cache_dir().parent(), Some(sandbox.config_dir()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn stages_only_the_requested_fixture() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+
+        let project = sandbox.stage_fixture(&Fixture::ReferenceProject)?;
+
+        assert_eq!(project, sandbox.root().join("reference-project"));
+        assert!(project.join("Cargo.toml").is_file());
+        assert!(!sandbox.root().join("local-registry").try_exists()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_stage_the_same_fixture_twice() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+
+        sandbox.stage_fixture(&Fixture::LocalRegistry)?;
+        sandbox
+            .stage_fixture(&Fixture::LocalRegistry)
+            .expect_err("staging the same fixture twice must fail");
 
         Ok(())
     }
