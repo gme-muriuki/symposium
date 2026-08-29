@@ -38,17 +38,25 @@ benches/
 |       |-- hook_dispatch.rs
 |       `-- workspace_deps.rs
 `-- fixtures/
-    `-- small-workspace/
-        |-- workspace/
-        |   |-- .cargo/
-        |   |   `-- config.toml
-        |   |-- Cargo.toml
-        |   |-- Cargo.lock
-        |   `-- crates/
-        `-- registry/
-            |-- always-active/
-            |-- predicate-gated/
-            `-- dormant/
+    |-- README.md
+    |-- reference-project/
+    |   |-- .cargo/
+    |   |   `-- config.toml
+    |   |-- Cargo.toml
+    |   |-- Cargo.lock
+    |   |-- cli/
+    |   |-- server/
+    |   |-- domain/
+    |   |-- terminal/
+    |   `-- storage/
+    `-- local-registry/
+        |-- always-active/
+        |   `-- SYMPOSIUM.toml
+        |-- predicate-gated/
+        |   |-- SYMPOSIUM.toml
+        |   `-- unexpected-hook.sh
+        `-- dormant/
+            `-- SYMPOSIUM.toml
 ```
 
 `benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, and validating prepared workloads. Individual benchmark targets retain semantic ownership of their scenarios and timed operations.
@@ -60,7 +68,7 @@ Each Criterion target is declared explicitly in the benchsuite manifest with `ha
 The root package sets `autobenches = false`, preventing Cargo from interpreting future paths under the top-level `benches` directory as benchmark targets of the `symposium` package. It also excludes `/benches` from the published package.
 `cargo package --list` verifies that benchmark-only files are absent from the crate archive.
 
-The fixture manifest is a virtual workspace and therefore defines its own workspace boundary. It does not need to be excluded from the parent workspace.
+The fixture manifest is a virtual workspace containing `cli` and `server`. The `domain`, `terminal`, and `storage` path dependencies are excluded from that workspace so Cargo metadata sees them as dependencies rather than members. Each dependency manifest contains an empty `[workspace]` marker, preventing Cargo from associating it with Symposium's outer workspace. The fixture therefore does not require entries in the root workspace's `exclude` list.
 
 ## Benchmark contract
 
@@ -104,10 +112,10 @@ Their shared contract is:
 | Field           | Definition                                                                                                                                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claim           | Wall-clock latency of Symposium's in-process `PreToolUse` pipeline in an unchanged Cargo workspace, at its minimal floor and with a representative local registry.                                                                                      |
-| Workload        | A simulated agent event in the checked-in fixture, with default auto-sync enabled, fresh workspace state, and a valid `WorkspaceDeps` disk cache. The local-registry case loads the fixture's three plugins.                                            |
+| Workload        | A simulated agent event using the checked-in fixtures, with default auto-sync enabled, fresh workspace state, and a valid `WorkspaceDeps` disk cache. The local-registry case loads the registry fixture's three plugins.                              |
 | Timed operation | Input parsing, auto-sync freshness decision, built-in dispatch, registry and workspace-plugin loading, plugin activation, hook selection, predicate evaluation, and output serialization.                                                               |
 | Excluded setup  | Fixture copy, `Symposium` construction, Tokio runtime construction, initial cache population, workspace-state preparation, and invariant checks. CLI startup, configuration parsing, registry refresh, stdin/stdout, and terminal I/O are not measured. |
-| Invariants      | The workspace state and dependency cache are valid; metadata and network access are not attempted; no external plugin process runs; the expected successful hook output is produced.                                                                    |
+| Invariants      | The workspace state and dependency cache are valid; metadata and network access are not attempted; the loaded plugin names are exactly the three fixture entries; no external plugin process runs; the expected successful hook output is produced.           |
 | Metric          | Wall-clock time per in-process hook dispatch.                                                                                                                                                                                                           |
 | Noise           | Cargo subprocess startup, filesystem and operating-system caches, process scheduling, shared-runner hardware, and developer-level Cargo configuration during local runs.                                                                                |
 | Lifecycle       | `experimental`.                                                                                                                                                                                                                                         |
@@ -115,11 +123,13 @@ Their shared contract is:
 
 The local registry has three fixed entries:
 
-- `always-active` uses the explicit `depends-on = "*"` gate and exercises the active-plugin path;
-- `predicate-gated` has a `PreToolUse` hook gated by `path_exists(.symposium-benchmark-never-present)`; setup asserts that path is absent, so hook selection and predicate evaluation run without spawning its otherwise-valid command;
+- `always-active` uses the explicit `depends-on = ["*"]` gate and exercises the active-plugin path;
+- `predicate-gated` has a `PreToolUse` hook gated by `path_exists(./.symposium-benchmark-never-present)`; setup asserts that path is absent from the benchmark process's current working directory, so hook selection and predicate evaluation run without spawning its otherwise-valid command;
 - `dormant` has no inferred or explicit activation gate and therefore exercises the dormant-plugin path.
 
 The benchmark package calls the public `symposium::hook::execute_hook` API directly rather than depending on `symposium-testlib`. This follows the same simulation seam as the test harness while keeping the benchmark package's support code focused.
+
+The predicate's relative path resolves from the benchmark process's current working directory, not from the copied project fixture. Cargo sets that directory to the `benches/benchsuite` package root. Setup reads the actual current directory and verifies the sentinel path is absent there before measurement.
 
 In the current implementation, the unchanged-workspace path executes `cargo locate-project` once during the auto-sync freshness check and again when the new `WorkspaceDeps` resolves its disk cache. These are identical subprocesses with identical arguments and working directory. The cases make that floor visible and will register a change if the flow later reuses the workspace root or otherwise removes one lookup. That optimization follows the benchmark addition rather than being bundled into it.
 
@@ -144,15 +154,17 @@ There is also no direct `try_disk_cache` benchmark in the initial story. That fu
 
 ### Fixture
 
-The checked-in `small-workspace` fixture contains a virtual Cargo workspace and the three-entry local plugin registry used by the representative hook case. The workspace has two members and three local path dependencies. One dependency is shared by both members. The dependency packages are excluded from fixture workspace membership, and a `Cargo.lock` is committed. This produces a small but nontrivial direct dependency graph.
+The checked-in `reference-project` fixture contains a virtual Cargo workspace with two members, `cli` and `server`, and three local path dependencies: `domain`, `terminal`, and `storage`. `domain` is shared by both members. The dependency packages are excluded from fixture workspace membership, and a `Cargo.lock` is committed. This produces a small but nontrivial direct dependency graph.
 
-The fixture contains `.cargo/config.toml` with Cargo offline mode enabled. Path dependencies and a committed lockfile avoid registry resolution; the Cargo configuration enforces the no-network invariant rather than relying on that layout by convention.
+The separate `local-registry` fixture contains the three manifest-backed entries used by the representative hook case. Keeping the registry outside the Cargo project models a separately configured registry and prevents workspace-plugin discovery from observing registry content. The fixtures README records the graph and registry invariants that support code validates before measurement.
 
-The local-registry configuration points at the copied `registry` directory with a sandbox-relative path. The minimal configuration leaves that same directory unconfigured. Both disable the builtin recommendations and user-plugin registries, so neither case depends on mutable user or remote content.
+The `reference-project` fixture contains `.cargo/config.toml` with Cargo offline mode enabled. Path dependencies and a committed lockfile avoid registry resolution; the Cargo configuration enforces the no-network invariant rather than relying on that layout by convention.
 
-The fixture represents one small project and registry, not a workspace-size or plugin-count scaling curve. Larger or generated fixtures require a separate benchmark claim.
+The local-registry configuration points at the copied `local-registry` fixture with a sandbox-relative path. The minimal configuration leaves that directory unconfigured. Both disable the builtin recommendations and user-plugin registries, so neither case depends on mutable user or remote content.
 
-Each benchmark run copies the fixture into an isolated sandbox. The sandbox also contains dedicated Symposium configuration and cache directories, so a run cannot read or modify the developer's normal Symposium state.
+The fixtures represent one small project and one registry, not a workspace-size or plugin-count scaling curve. Larger or generated fixtures require a separate benchmark claim.
+
+Each benchmark run copies the required fixtures into an isolated sandbox. The sandbox also contains dedicated Symposium configuration and cache directories, so a run cannot read or modify the developer's normal Symposium state.
 
 The initial harness does not change the benchmark process's `CARGO_HOME`. Process-wide environment mutation is unsafe once other threads may exist, and the production resolver has no per-command Cargo-environment seam. CI provides an ephemeral Cargo home; local runs may still be influenced by user-level Cargo configuration. The fixture-local offline setting enforces the important no-network property, and the remaining local configuration is recorded as noise rather than expanding production APIs solely for the benchmark.
 
@@ -192,7 +204,7 @@ Smoke runs execute workloads without collecting full measurements. Normal pull r
 The operator guide records the authoritative commands. The initial interface is:
 
 ```text
-cargo check -p symposium-benchsuite --benches
+cargo check -p symposium-benchsuite --all-targets
 cargo test -p symposium-benchsuite --lib
 cargo test -p symposium-benchsuite --benches
 cargo bench -p symposium-benchsuite --bench workspace_deps
@@ -203,14 +215,14 @@ Criterion filters allow an individual group or case to run without executing unr
 
 ## CI and result lifecycle
 
-Normal pull request CI runs `cargo check -p symposium-benchsuite --benches` on native Linux, macOS, and Windows jobs. The musl cross-compilation job is not part of the initial benchmark check. Support-library and cache-invariant tests run as ordinary correctness tests.
+Normal pull request CI runs `cargo check -p symposium-benchsuite --all-targets` on native Linux, macOS, and Windows jobs. The musl cross-compilation job is not part of the initial benchmark check. Support-library and cache-invariant tests run as ordinary correctness tests.
 
 A separate measurement workflow runs:
 
 - on manual dispatch for a chosen ref;
 - on pull requests that change benchmark code or a path participating in the measured flows, including the benchmark workflow file itself.
 
-The initial path filter covers `benches/**`, the root Cargo manifests, `.github/workflows/benchmarks.yml`, and the relevant configuration, hook, workspace-state, plugin, predicate, directory, and package-manager modules under `src`. It does not include `src/skills.rs`, which the measured hook path does not execute.
+The initial path filter covers `benches/**`, the root Cargo manifests, `.github/workflows/benchmarks.yml`, and the relevant configuration, hook, workspace-state, plugin, predicate, directory, and package-manager modules under `src`. It does not include `src/skills.rs`: every registry entry is manifest-backed, and the measured hook path therefore does not execute the standalone-skill loader.
 
 There is no weekly schedule initially. A scheduled job is added only when its results have a durable consumer or a named maintainer responsible for reviewing them. Until then, a recurring artifact would be write-only storage.
 

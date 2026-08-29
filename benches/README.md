@@ -7,7 +7,7 @@ See the [benchmarking design](../md/design/benchmarking.md) for the suite archit
 ## Layout
 
 - `benchsuite/` is the non-publishable workspace package containing benchmark targets and shared support code.
-- `fixtures/` is the location for deterministic workloads shared between benchmark targets.
+- `fixtures/` contains the composable deterministic workloads described in its own [README](fixtures/README.md).
 
 Shared support code handles fixtures and sandbox mechanics. Each benchmark target is responsible for defining its own scenarios and timed operations.
 
