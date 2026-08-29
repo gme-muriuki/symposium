@@ -77,6 +77,22 @@ impl Sandbox {
         Ok(destination)
     }
 
+    /// Remove the sandbox's workspace dependency caches.
+    pub fn clear_workspace_cache(&self) -> Result<()> {
+        let workspace_cache = self.cache_dir.join("workspaces");
+
+        match fs::remove_dir_all(&workspace_cache) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "removing benchmark workspace cache `{}`",
+                    workspace_cache.display()
+                )
+            }),
+        }
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }
@@ -197,10 +213,16 @@ mod tests {
         fs::create_dir(&destination)?;
         fs::write(&sentinel, "leave me untouched")?;
 
-        Fixture::ReferenceProject
+        let error = Fixture::ReferenceProject
             .copy_to(&destination)
             .expect_err("copying into an existing destination must fail");
+        let message = error.to_string();
 
+        assert!(
+            message.contains(&destination.display().to_string()),
+            "error does not name destination `{}`: {error:#}",
+            destination.display()
+        );
         assert_eq!(fs::read_to_string(sentinel)?, "leave me untouched");
         assert!(!destination.join("Cargo.toml").try_exists()?);
 
@@ -241,6 +263,42 @@ mod tests {
         sandbox
             .stage_fixture(&Fixture::LocalRegistry)
             .expect_err("staging the same fixture twice must fail");
+
+        Ok(())
+    }
+
+    #[test]
+    fn clears_only_the_workspace_cache() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+        let project = sandbox.stage_fixture(&Fixture::ReferenceProject)?;
+        let config_file = sandbox.config_dir().join("config.toml");
+        let workspace_cache = sandbox
+            .cache_dir()
+            .join("workspaces")
+            .join("reference-project");
+        let binary_cache = sandbox
+            .cache_dir()
+            .join("binaries")
+            .join("example")
+            .join("1.0.0");
+
+        fs::write(&config_file, "benchmark configuration")?;
+        fs::create_dir_all(&workspace_cache)?;
+        fs::write(workspace_cache.join("workspace-deps.json"), "cached data")?;
+        fs::create_dir_all(&binary_cache)?;
+        fs::write(binary_cache.join("example"), "cached binary")?;
+
+        sandbox.clear_workspace_cache()?;
+        sandbox.clear_workspace_cache()?;
+
+        assert!(sandbox.cache_dir().is_dir());
+        assert!(!workspace_cache.try_exists()?);
+        assert_eq!(
+            fs::read_to_string(binary_cache.join("example"))?,
+            "cached binary"
+        );
+        assert!(project.join("Cargo.toml").is_file());
+        assert_eq!(fs::read_to_string(config_file)?, "benchmark configuration");
 
         Ok(())
     }
