@@ -2462,6 +2462,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "symposium-benchsuite"
+version = "0.1.0"
+
+[[package]]
 name = "symposium-install"
 version = "0.1.0"
 dependencies = [
