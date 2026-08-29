@@ -33,7 +33,9 @@ benches/
 |-- benchsuite/
 |   |-- Cargo.toml
 |   |-- src/
-|   |   `-- lib.rs
+|   |   |-- lib.rs
+|   |   |-- fixture.rs
+|   |   `-- sandbox.rs
 |   `-- benches/
 |       |-- hook_dispatch.rs
 |       `-- workspace_deps.rs
@@ -59,7 +61,7 @@ benches/
             `-- SYMPOSIUM.toml
 ```
 
-`benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, and validating prepared workloads. Individual benchmark targets retain semantic ownership of their scenarios and timed operations.
+`benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, and validating prepared workloads. Fixture metadata is centralized in private typed specifications so its directory, required files, and expected workspace shape cannot drift across separate declarations. The library exports only the fixture, staged-fixture, and sandbox capabilities needed by benchmark targets. Individual targets retain semantic ownership of their scenarios and timed operations.
 
 Each Criterion target is declared explicitly in the benchsuite manifest with `harness = false`. Shared support code does not wrap Criterion or define a universal benchmark framework. A target exposes Criterion's concepts directly so its measurement choices remain visible.
 
