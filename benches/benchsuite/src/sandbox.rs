@@ -1,12 +1,15 @@
 //! Isolated filesystem state for benchmark workloads.
 
-use crate::fixture::{Fixture, StagedFixture};
-use anyhow::{Context, Result};
 use std::{
-    fs,
+    fs::{self, File},
+    io::Write,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context, Result};
 use tempfile::{Builder, TempDir};
+
+use crate::fixture::{Fixture, StagedFixture};
 
 /// Isolated filesystem state for a benchmark workload.
 #[derive(Debug)]
@@ -42,6 +45,16 @@ impl Sandbox {
     /// Copy `fixture` into the sandbox and validate its layout.
     pub fn stage(&self, fixture: Fixture) -> Result<StagedFixture> {
         StagedFixture::stage(fixture, self.root().join(fixture.directory_name()))
+    }
+
+    /// Write the sandbox configuration, refusing to replace an existing file.
+    pub fn write_config(&self, contents: &str) -> Result<()> {
+        let path = self.config_dir.join("config.toml");
+        let mut file = File::create_new(&path)
+            .with_context(|| format!("creating benchmark configuration `{}`", path.display()))?;
+
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("writing benchmark configuration `{}`", path.display()))
     }
 
     /// Remove the sandbox's workspace dependency caches.
@@ -111,6 +124,41 @@ mod tests {
         sandbox
             .stage(Fixture::LocalRegistry)
             .expect_err("staging the same fixture twice must fail");
+
+        Ok(())
+    }
+
+    #[test]
+    fn writes_configuration_contents() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+
+        sandbox.write_config("benchmark configuration")?;
+
+        assert_eq!(
+            fs::read_to_string(sandbox.config_dir().join("config.toml"))?,
+            "benchmark configuration"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_overwrite_configuration() -> Result<()> {
+        let sandbox = Sandbox::new()?;
+        let config_file = sandbox.config_dir().join("config.toml");
+        sandbox.write_config("original configuration")?;
+
+        let error = sandbox
+            .write_config("replacement configuration")
+            .expect_err("writing configuration twice must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&config_file.display().to_string()),
+            "error should identify the existing configuration: {error:#}"
+        );
+        assert_eq!(fs::read_to_string(config_file)?, "original configuration");
 
         Ok(())
     }
