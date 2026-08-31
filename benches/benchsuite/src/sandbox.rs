@@ -11,7 +11,6 @@ use tempfile::{Builder, TempDir};
 
 use crate::fixture::{Fixture, StagedFixture};
 
-/// Isolated filesystem state for a benchmark workload.
 #[derive(Debug)]
 pub struct Sandbox {
     root: TempDir,

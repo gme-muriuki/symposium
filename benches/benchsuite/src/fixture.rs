@@ -123,10 +123,8 @@ impl Fixture {
     }
 }
 
-/// A fixture copied into a [`crate::Sandbox`].
-///
-/// Staging validates the layout, so a benchmark cannot reach a timed operation
-/// with a workload that is missing checked-in files.
+/// A fixture copied into a [`crate::Sandbox`], with its layout validated, so a
+/// benchmark cannot time a workload that is missing checked-in files.
 #[derive(Debug)]
 pub struct StagedFixture {
     fixture: Fixture,
@@ -189,8 +187,7 @@ impl StagedFixture {
 }
 
 fn check_path_dependency(root: &Path, dependency: &WorkspaceCrate) -> Result<()> {
-    // A registry dependency would need the network, so the fixture is
-    // hermetic only while every dependency resolves inside it.
+    // The fixture is hermetic only while every dependency resolves inside it.
     let Some(path) = dependency.path.as_deref() else {
         bail!(
             "dependency `{}` is not a local path dependency",
@@ -222,10 +219,8 @@ fn check_path_dependency(root: &Path, dependency: &WorkspaceCrate) -> Result<()>
     Ok(())
 }
 
-/// Compare two name lists order-insensitively, reporting both sides on failure.
-///
-/// Sorted vectors rather than sets, so a duplicated name changes the length and
-/// fails instead of being silently absorbed.
+/// Compare two name lists order-insensitively. Sorted vectors rather than sets,
+/// so a duplicated name fails instead of being absorbed.
 fn check_names(kind: &str, expected: &[&str], actual: &[&str]) -> Result<()> {
     let mut expected = expected.to_vec();
     let mut actual = actual.to_vec();
@@ -306,7 +301,6 @@ mod tests {
     use symposium::dirs::SymposiumDirs;
     use tempfile::tempdir;
 
-    /// Stage the reference project and resolve it, as a benchmark would.
     fn resolve_reference_project() -> Result<(Sandbox, StagedFixture, LoadedWorkspace)> {
         let sandbox = Sandbox::new()?;
         let project = sandbox.stage(Fixture::ReferenceProject)?;
