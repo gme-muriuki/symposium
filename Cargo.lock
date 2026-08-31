@@ -2672,8 +2672,10 @@ dependencies = [
  "anyhow",
  "criterion",
  "indoc",
+ "serde_json",
  "symposium",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
