@@ -15,12 +15,12 @@ Shared support code handles fixtures and sandbox mechanics. Each benchmark targe
 
 | Target | Cases | Lifecycle |
 | --- | --- | --- |
-| [`workspace_deps`](benchsuite/benches/workspace_deps.rs) | `symposium_cache_miss` | Experimental |
+| [`workspace_deps`](benchsuite/benches/workspace_deps.rs) | `symposium_cache_miss`, `new_resolver_disk_cache_hit` | Experimental |
 
-`workspace_deps/symposium_cache_miss` measures dependency resolution with an
-empty Symposium workspace cache. It is not a fully cold machine load: Cargo and
-operating-system caches may already be warm. The target's source contains the
-complete measurement contract.
+`workspace_deps` compares dependency resolution with an empty Symposium
+workspace cache against a new resolver reusing a valid disk cache. The miss is
+not a fully cold machine load: Cargo and operating-system caches may already be
+warm. The target's source contains the complete measurement contracts.
 
 ## Commands
 
@@ -33,7 +33,7 @@ cargo test -p symposium-benchsuite --benches
 cargo bench -p symposium-benchsuite --bench workspace_deps
 ```
 
-Pass `symposium_cache_miss` after `--` to run only that case.
+Pass either case name after `--` to run only that case.
 
 ## Benchmark contracts
 

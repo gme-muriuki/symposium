@@ -33,8 +33,9 @@ benches/
 |-- benchsuite/
 |   |-- Cargo.toml
 |   |-- src/
-|   |   |-- lib.rs
+|   |   |-- cargo.rs
 |   |   |-- fixture.rs
+|   |   |-- lib.rs
 |   |   `-- sandbox.rs
 |   `-- benches/
 |       |-- hook_dispatch.rs
@@ -61,7 +62,7 @@ benches/
             `-- SYMPOSIUM.toml
 ```
 
-`benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, and validating prepared workloads. Fixture metadata is centralized in private typed specifications so its directory, required files, and expected workspace shape cannot drift across separate declarations. The library exports only the fixture, staged-fixture, and sandbox capabilities needed by benchmark targets. Individual targets retain semantic ownership of their scenarios and timed operations.
+`benchsuite` is a non-publishable package (`publish = false`) listed explicitly in the root workspace's `members`. Its library owns reusable mechanics: locating and copying checked-in fixtures, creating isolated configuration and cache directories, validating prepared workloads, and constructing the metadata-rejecting Cargo guard used by untimed cache-hit preflights. Fixture metadata is centralized in private typed specifications so its directory, required files, and expected workspace shape cannot drift across separate declarations. The library exports only the fixture, staged-fixture, sandbox, and Cargo-guard capabilities needed by benchmark targets. Individual targets retain semantic ownership of their scenarios and timed operations.
 
 Each Criterion target is declared explicitly in the benchsuite manifest with `harness = false`. Shared support code does not wrap Criterion or define a universal benchmark framework. A target exposes Criterion's concepts directly so its measurement choices remain visible.
 
@@ -96,6 +97,8 @@ The target's doc comment is the single source of truth because it is next to the
 The initial suite uses [Criterion.rs](https://criterion-rs.github.io/book/). The performance story includes filesystem access and Cargo subprocesses, so wall-clock measurement and statistical sampling are appropriate. A callgrind-based instruction counter would not represent the latency of those external operations. It may still be useful for a later CPU-bound benchmark.
 
 The implementation uses `std::hint::black_box` for both values passed from Criterion setup into a timed closure and results returned by the timed operation. Fixture preparation, cache-state construction, runtime construction, and correctness assertions remain outside the timer.
+
+The initial `WorkspaceDeps` cases use Criterion's minimum of ten samples and a 15-second measurement target. These subprocess-bound cases can take more than a second per iteration and vary substantially across machines, so the suite bounds individual runs instead of continually increasing the target time. Lifecycle stability is evaluated from repeated runs in the pinned benchmark environment rather than from a larger local sample count.
 
 ## Hook cases: unchanged workspace
 
@@ -231,7 +234,7 @@ There is no weekly schedule initially. A scheduled job is added only when its re
 
 The measurement workflow uses `ubuntu-24.04` and names an exact Rust toolchain version rather than the moving `stable` alias. Changing either is an explicit benchmark-environment change and resets historical comparability. Each run records the commit SHA, Rust and Cargo versions, operating-system details, and available CPU information.
 
-Headline estimates are written to the Actions job summary so the person who triggered a run can read them without downloading an archive. Criterion's full result directory is uploaded as an expiring artifact only for post-hoc inspection. General build caches must not implicitly supply an unnamed Criterion baseline; otherwise the displayed comparison can refer to an unrelated run.
+Headline estimates are written to the Actions job summary so the person who triggered a run can read them without downloading an archive. For the `WorkspaceDeps` pair, the summary includes both medians and the derived cache-miss-to-hit speedup ratio. Criterion's full result directory is uploaded as an expiring artifact only for post-hoc inspection. General build caches must not implicitly supply an unnamed Criterion baseline; otherwise the displayed comparison can refer to an unrelated run.
 
 The initial workflow does not fail because of a measured slowdown and is not a required merge gate. Compilation failures, setup failures, and benchmark crashes remain visible failures rather than being hidden with `continue-on-error`.
 
