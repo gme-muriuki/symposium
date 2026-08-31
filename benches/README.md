@@ -13,7 +13,14 @@ Shared support code handles fixtures and sandbox mechanics. Each benchmark targe
 
 ## Current targets
 
-No benchmark targets have been implemented yet. Each target will be added here when it becomes independently runnable.
+| Target | Cases | Lifecycle |
+| --- | --- | --- |
+| [`workspace_deps`](benchsuite/benches/workspace_deps.rs) | `symposium_cache_miss` | Experimental |
+
+`workspace_deps/symposium_cache_miss` measures dependency resolution with an
+empty Symposium workspace cache. It is not a fully cold machine load: Cargo and
+operating-system caches may already be warm. The target's source contains the
+complete measurement contract.
 
 ## Commands
 
@@ -22,7 +29,11 @@ Run commands from the repository root:
 ```text
 cargo check -p symposium-benchsuite --all-targets
 cargo test -p symposium-benchsuite --lib
+cargo test -p symposium-benchsuite --benches
+cargo bench -p symposium-benchsuite --bench workspace_deps
 ```
+
+Pass `symposium_cache_miss` after `--` to run only that case.
 
 ## Benchmark contracts
 
