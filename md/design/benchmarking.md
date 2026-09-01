@@ -233,13 +233,15 @@ A separate measurement workflow runs:
 - on manual dispatch for a chosen ref;
 - on pull requests that change benchmark code or a path participating in the measured flows, including the benchmark workflow file itself.
 
-The initial path filter covers `benches/**`, the root Cargo manifests, `.github/workflows/benchmarks.yml`, and the relevant configuration, hook, workspace-state, plugin, predicate, directory, and package-manager modules under `src`. It does not include `src/skills.rs`: every registry entry is manifest-backed, and the measured hook path therefore does not execute the standalone-skill loader.
+The pull-request path filter follows package and configuration ownership boundaries rather than listing individual source modules. It covers `.cargo/**`, `benches/**`, `src/**`, `symposium-install/**`, `symposium-sdk/**`, the root Cargo manifests, and the benchmark workflow itself. This deliberately accepts some extra runs: a module-by-module list can miss a transitive dependency or become incomplete when code moves, silently leaving measured behavior uncovered.
 
 There is no weekly schedule initially. A scheduled job is added only when its results have a durable consumer or a named maintainer responsible for reviewing them. Until then, a recurring artifact would be write-only storage.
 
-The measurement workflow uses `ubuntu-24.04` and names an exact Rust toolchain version rather than the moving `stable` alias. Changing either is an explicit benchmark-environment change and resets historical comparability. Each run records the commit SHA, Rust and Cargo versions, operating-system details, and available CPU information.
+The measurement workflow uses `ubuntu-24.04` and names an exact Rust toolchain version rather than the moving `stable` alias. Changing either is an explicit benchmark-environment change and resets historical comparability. It uses Node 24-compatible releases of the official GitHub checkout, cache, and artifact actions so the measurement job does not depend on a deprecated runner runtime. Each run records the commit SHA, Rust and Cargo versions, operating-system details, and available CPU information.
 
-Headline estimates are written to the Actions job summary so the person who triggered a run can read them without downloading an archive. For the `WorkspaceDeps` pair, the summary includes both medians and the derived cache-miss-to-hit speedup ratio. Criterion's full result directory is uploaded as an expiring artifact only for post-hoc inspection. General build caches must not implicitly supply an unnamed Criterion baseline; otherwise the displayed comparison can refer to an unrelated run.
+Before measuring, the workflow runs every Criterion target once in test mode. This separates workload correctness from statistical measurement and fails early when fixture preparation, invariants, or timed operations are broken.
+
+Headline estimates are written to the Actions job summary so the person who triggered a run can read them without downloading an archive. The summary labels the measurements as experimental and informational. For the `WorkspaceDeps` pair, it includes both medians and the derived cache-miss-to-hit speedup ratio. Criterion's full result directory is uploaded as an expiring, run-attempt-specific artifact only for post-hoc inspection. The attempt identifier prevents an immutable artifact from colliding with one produced by an earlier rerun. General build caches must not implicitly supply an unnamed Criterion baseline; otherwise the displayed comparison can refer to an unrelated run.
 
 The initial workflow does not fail because of a measured slowdown and is not a required merge gate. Compilation failures, setup failures, and benchmark crashes remain visible failures rather than being hidden with `continue-on-error`.
 
@@ -269,29 +271,3 @@ The first pull request is built as independently working additions:
 7. CI workflows and final documentation updates.
 
 Each addition compiles and has one stated purpose before the next is introduced. Implementation findings can revise this design when the code exposes a misleading workload or unnecessary abstraction.
-
-## Direct precedents
-
-Four projects directly inform decisions in this design:
-
-- [Cargo](https://doc.crates.io/contrib/tests/profiling.html) uses a dedicated benchsuite with common fixture support and independently selectable targets.
-- [rustc-perf](https://github.com/rust-lang/rustc-perf) separates collection from presentation and classifies workloads by stability and importance.
-- [rustls](https://github.com/rustls/rustls/blob/main/BENCHMARKING.md) separates benchmark layers and uses history before deriving regression significance.
-- Serde's separate [JSON benchmark repository](https://github.com/serde-rs/json-benchmark) is archived, illustrating the maintenance risk of separating core benchmarks from the project that owns them.
-
-## Research appendix
-
-The broader ecosystem survey informed the benchmark contract and the boundary between focused in-repository measurements and possible future system suites:
-
-
-| Project                                                                                                                                                 | Relevant lesson                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| [Tokio](https://github.com/tokio-rs/tokio/tree/master/benches)                                                                                          | Group focused targets by subsystem; state when a case is a regression sentinel rather than a real-world workload.     |
-| [ripgrep](https://github.com/BurntSushi/ripgrep/tree/master/benchsuite)                                                                                 | Treat corpora, command equivalence, warmup, raw results, and output validation as part of the workload definition.    |
-| [rebar](https://github.com/BurntSushi/rebar)                                                                                                            | Separate workload definitions, adapters, shared data, methodology, and recorded results in a large comparative suite. |
-| [Polars](https://github.com/pola-rs/polars-benchmark)                                                                                                   | Keep datasets, expected answers, query definitions, and execution scripts together for system-level scenarios.        |
-| [Tantivy](https://github.com/quickwit-oss/tantivy/tree/main/benches) and [search-benchmark-game](https://github.com/quickwit-oss/search-benchmark-game) | Keep focused component benchmarks in-repository and move large cross-engine workloads to a purpose-built suite.       |
-| [bstr](https://github.com/BurntSushi/bstr/tree/master/bench)                                                                                            | Treat representative input corpora as first-class benchmark data.                                                     |
-
-
-These projects support two layers: bounded component and workflow benchmarks in this repository now, and specialized product-scale scenarios only when a specific future workload justifies them.
