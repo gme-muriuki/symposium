@@ -80,6 +80,7 @@ const LOCAL_REGISTRY_SPEC: FixtureSpec = FixtureSpec {
     required_files: &[
         "always-active/SYMPOSIUM.toml",
         "predicate-gated/SYMPOSIUM.toml",
+        "predicate-gated/unexpected-hook.sh",
         "dormant/SYMPOSIUM.toml",
     ],
     workspace_shape: None,
