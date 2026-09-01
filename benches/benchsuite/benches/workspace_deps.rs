@@ -49,7 +49,7 @@
 use std::{hint::black_box, time::Duration};
 
 use anyhow::{Context, Result, ensure};
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 
 use symposium::{dirs::SymposiumDirs, pm::WorkspaceDeps};
 use symposium_benchsuite::{Fixture, MetadataRejectingCargo, Sandbox, StagedFixture};
@@ -177,6 +177,9 @@ fn benchmark_workspace_deps(criterion: &mut Criterion) {
     // from repeated runs in the pinned benchmark environment.
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(15));
+    // Cache misses are long-running, so flat sampling bounds the work. Making
+    // the mode explicit also prevents latency drift from changing the model.
+    group.sampling_mode(SamplingMode::Flat);
     group.bench_function("symposium_cache_miss", |bencher| {
         bencher.iter_batched(
             || {
@@ -194,6 +197,9 @@ fn benchmark_workspace_deps(criterion: &mut Criterion) {
     workload
         .verify_disk_cache_hit()
         .expect("the disk cache must be valid before measuring cache hits");
+    // Cache hits are short enough for linear sampling, which retains
+    // Criterion's per-iteration regression model at an affordable cost.
+    group.sampling_mode(SamplingMode::Linear);
     group.bench_function("new_resolver_disk_cache_hit", |bencher| {
         bencher.iter_batched(
             || workload.disk_cache_hit_resolver(),
