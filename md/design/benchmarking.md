@@ -108,7 +108,7 @@ The hook target contains two cases:
 | Case                                        | Configuration                                                            | Interpretation                                                                                                                      |
 | ------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `hook_dispatch/pre_tool_use_minimal_config` | Both builtin registries disabled and no configured plugins               | The fixed in-process pipeline and Cargo-subprocess floor.                                                                           |
-| `hook_dispatch/pre_tool_use_local_registry` | Builtin registries disabled and one small local path registry configured | The headline case: fixed overhead plus deterministic registry loading, activation gating, hook selection, and predicate evaluation. |
+| `hook_dispatch/pre_tool_use_local_registry` | Builtin registries disabled and one small local path registry configured | The headline end-to-end case for a representative local registry. It includes registry loading, activation gating, hook selection, and predicate evaluation, but does not isolate their cost from the Cargo-subprocess floor. |
 
 
 Their shared contract is:
@@ -122,7 +122,7 @@ Their shared contract is:
 | Excluded setup  | Fixture copy, `Symposium` construction, Tokio runtime construction, initial cache population, workspace-state preparation, and invariant checks. CLI startup, configuration parsing, registry refresh, stdin/stdout, and terminal I/O are not measured. |
 | Invariants      | The workspace state and dependency cache are valid; metadata and network access are not attempted; the loaded plugin names are exactly the three fixture entries; no external plugin process runs; the expected successful hook output is produced.           |
 | Metric          | Wall-clock time per in-process hook dispatch.                                                                                                                                                                                                           |
-| Noise           | Cargo subprocess startup, filesystem and operating-system caches, process scheduling, shared-runner hardware, and developer-level Cargo configuration during local runs.                                                                                |
+| Noise           | The two Cargo workspace-lookup subprocesses currently dominate the result and can mask changes in the in-process registry and predicate work. Filesystem and operating-system caches, process scheduling, shared-runner hardware, and developer-level Cargo configuration also vary. |
 | Lifecycle       | `experimental`.                                                                                                                                                                                                                                         |
 
 
@@ -137,6 +137,11 @@ The benchmark package calls the public `symposium::hook::execute_hook` API direc
 The predicate's relative path resolves from the benchmark process's current working directory, not from the copied project fixture. Cargo sets that directory to the `benches/benchsuite` package root. Setup reads the actual current directory and verifies the sentinel path is absent there before measurement.
 
 In the current implementation, the unchanged-workspace path executes `cargo locate-project` once during the auto-sync freshness check and again when the new `WorkspaceDeps` resolves its disk cache. These are identical subprocesses with identical arguments and working directory. The cases make that floor visible and will register a change if the flow later reuses the workspace root or otherwise removes one lookup. That optimization follows the benchmark addition rather than being bundled into it.
+
+The local-registry case therefore reports representative end-to-end dispatch
+latency, not an isolated registry-processing measurement. The subprocess floor
+can hide changes in the smaller in-process portion; a focused component case is
+needed later if those operations require their own regression sentinel.
 
 ## Component cases: `WorkspaceDeps`
 
