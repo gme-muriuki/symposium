@@ -28,6 +28,32 @@
 //!   caches, process scheduling, shared-runner hardware, and developer-level
 //!   Cargo configuration during local runs.
 //! - **Lifecycle:** Experimental.
+//!
+//! # `pre_tool_use_local_registry` contract
+//!
+//! - **Claim:** End-to-end wall-clock latency of an unchanged-workspace
+//!   `PreToolUse` dispatch with a representative local registry and no external
+//!   plugin execution. This is not an isolated measure of registry processing.
+//! - **Workload:** A staged copy of the reference project and three-entry local
+//!   registry with default auto-sync enabled, both builtin registries disabled,
+//!   fresh workspace state, and a valid `WorkspaceDeps` disk cache.
+//! - **Timed operation:** `execute_hook`, including input parsing, the auto-sync
+//!   freshness decision, builtin dispatch, workspace-cache reuse, registry
+//!   loading, plugin activation, hook selection, predicate evaluation, and
+//!   output serialization.
+//! - **Excluded setup:** Fixture staging, `Symposium` and Tokio runtime
+//!   construction, configuration parsing, initial cache population,
+//!   workspace-state preparation, and invariant checks.
+//! - **Invariants:** Auto-sync is enabled; exactly the three fixture plugins are
+//!   loaded; workspace state and the dependency cache are valid; `cargo
+//!   metadata` is not attempted; the predicate sentinel is absent; no external
+//!   plugin process runs; and a preflight produces the expected no-op output.
+//! - **Metric:** Wall-clock time per in-process `PreToolUse` dispatch.
+//! - **Noise:** The two Cargo workspace-lookup subprocesses currently dominate
+//!   the result and can mask changes in registry loading and predicate
+//!   evaluation. Filesystem and operating-system caches, process scheduling,
+//!   shared-runner hardware, and developer-level Cargo configuration also vary.
+//! - **Lifecycle:** Experimental.
 
 use std::{
     hint::black_box,
@@ -37,7 +63,6 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
-use indoc::indoc;
 use serde_json::{Value, json};
 use tokio::runtime::{Builder, Runtime};
 
@@ -49,13 +74,72 @@ use symposium::{
 };
 use symposium_benchsuite::{Fixture, MetadataRejectingCargo, Sandbox, StagedFixture};
 
-/// Both builtin registries default to enabled, so the minimal case has to
-/// switch them off rather than omit them.
-const MINIMAL_CONFIG: &str = indoc! {r#"
-    [defaults]
-    symposium-recommendations = false
-    user-plugins = false
-"#};
+const LOCAL_REGISTRY_PLUGINS: &[&str] = &["always-active", "dormant", "predicate-gated"];
+const PREDICATE_SENTINEL: &str = ".symposium-benchmark-never-present";
+
+/// The checked-in configuration and fixtures for one dispatch measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookDispatchScenario {
+    Minimal,
+    LocalRegistry,
+}
+
+impl HookDispatchScenario {
+    const fn config(self) -> &'static str {
+        match self {
+            Self::Minimal => include_str!("../../fixtures/config/minimal.toml"),
+            Self::LocalRegistry => {
+                include_str!("../../fixtures/config/local-registry.toml")
+            }
+        }
+    }
+
+    const fn registry_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Minimal => &[],
+            Self::LocalRegistry => &["benchmark-local"],
+        }
+    }
+
+    const fn plugin_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Minimal => &[],
+            Self::LocalRegistry => LOCAL_REGISTRY_PLUGINS,
+        }
+    }
+
+    fn stage_supporting_fixtures(self, sandbox: &Sandbox) -> Result<()> {
+        match self {
+            Self::Minimal => Ok(()),
+            Self::LocalRegistry => {
+                sandbox.stage(Fixture::LocalRegistry)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn verify_process_state(self) -> Result<()> {
+        match self {
+            Self::Minimal => Ok(()),
+            Self::LocalRegistry => {
+                let current_dir = std::env::current_dir()
+                    .context("reading the benchmark process working directory")?;
+                let sentinel = current_dir.join(PREDICATE_SENTINEL);
+
+                ensure!(
+                    !sentinel.try_exists().with_context(|| format!(
+                        "checking for predicate sentinel `{}`",
+                        sentinel.display()
+                    ))?,
+                    "predicate sentinel unexpectedly exists: {}",
+                    sentinel.display()
+                );
+
+                Ok(())
+            }
+        }
+    }
+}
 
 /// Construction checks every property a measurement depends on, so a broken
 /// setup fails the run rather than shortening a sample.
@@ -67,10 +151,11 @@ struct HookDispatchWorkload {
 }
 
 impl HookDispatchWorkload {
-    fn prepare_minimal() -> Result<Self> {
+    fn prepare(scenario: HookDispatchScenario) -> Result<Self> {
         let sandbox = Sandbox::new()?;
         let project = sandbox.stage(Fixture::ReferenceProject)?;
-        sandbox.write_config(MINIMAL_CONFIG)?;
+        scenario.stage_supporting_fixtures(&sandbox)?;
+        sandbox.write_config(scenario.config())?;
 
         // `from_dir` reads `config.toml` eagerly, so it has to exist by now.
         let symposium = Symposium::from_dir(sandbox.config_dir());
@@ -91,13 +176,13 @@ impl HookDispatchWorkload {
             input,
         };
 
-        workload.verify_minimal_configuration(&project)?;
+        workload.verify_configuration(scenario, &project)?;
         workload.verify_dispatch()?;
 
         Ok(workload)
     }
 
-    /// Run the operation measured by the minimal case.
+    /// Run the operation measured by each dispatch case.
     fn dispatch(&self) -> Result<Vec<u8>> {
         self.dispatch_with(&self.symposium)
     }
@@ -119,22 +204,26 @@ impl HookDispatchWorkload {
 
     /// Prove the configuration this case describes is the one in effect.
     ///
-    /// Each check covers a way the workload looks fine while measuring less:
-    /// auto-sync off returns before the workspace lookup, a misplaced config
-    /// leaves the builtin registries enabled but empty, and an unresolved
-    /// workspace skips plugin discovery. The last two both end in zero plugins.
-    fn verify_minimal_configuration(&self, project: &StagedFixture) -> Result<()> {
+    /// Each check covers a way the workload could silently measure less:
+    /// auto-sync off returns before workspace lookup, the wrong configuration
+    /// changes the registry set, and missing or malformed entries reduce the
+    /// plugins loaded from the fixture.
+    fn verify_configuration(
+        &self,
+        scenario: HookDispatchScenario,
+        project: &StagedFixture,
+    ) -> Result<()> {
         ensure!(
             self.symposium.config.auto_sync,
-            "the minimal workload requires auto-sync to be enabled"
+            "the hook-dispatch workload requires auto-sync to be enabled"
         );
 
         let registries = self.symposium.registry_instances();
-        ensure!(
-            registries.is_empty(),
-            "the minimal configuration resolved {} registry instance(s); expected none",
-            registries.len()
-        );
+        check_names(
+            "registry instances",
+            scenario.registry_names(),
+            registries.iter().map(|registry| registry.name.as_str()),
+        )?;
 
         let resolver = self.symposium.workspace_deps(project.path());
         let workspace = resolver
@@ -145,21 +234,20 @@ impl HookDispatchWorkload {
             Some(workspace),
         ));
 
-        let names: Vec<_> = registry
-            .plugins
-            .iter()
-            .map(|parsed| parsed.plugin.name.as_str())
-            .collect();
-        ensure!(
-            names.is_empty(),
-            "the minimal configuration loaded plugins: [{}]",
-            names.join(", ")
-        );
+        check_names(
+            "loaded plugins",
+            scenario.plugin_names(),
+            registry
+                .plugins
+                .iter()
+                .map(|parsed| parsed.plugin.name.as_str()),
+        )?;
         ensure!(
             registry.warnings.is_empty(),
-            "the minimal configuration produced {} plugin load warning(s)",
+            "the hook-dispatch configuration produced {} plugin load warning(s)",
             registry.warnings.len()
         );
+        scenario.verify_process_state()?;
 
         Ok(())
     }
@@ -191,6 +279,26 @@ impl HookDispatchWorkload {
 
         Ok(())
     }
+}
+
+fn check_names<'a>(
+    kind: &str,
+    expected: &[&str],
+    actual: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    let mut expected = expected.to_vec();
+    let mut actual: Vec<_> = actual.into_iter().collect();
+    expected.sort_unstable();
+    actual.sort_unstable();
+
+    ensure!(
+        actual == expected,
+        "unexpected {kind}: expected [{}], found [{}]",
+        expected.join(", "),
+        actual.join(", ")
+    );
+
+    Ok(())
 }
 
 /// Validate the resolved graph and leave a warm disk cache behind.
@@ -244,8 +352,10 @@ fn pre_tool_use_payload(project: &Path) -> Result<String> {
 }
 
 fn benchmark_hook_dispatch(criterion: &mut Criterion) {
-    let workload = HookDispatchWorkload::prepare_minimal()
+    let minimal = HookDispatchWorkload::prepare(HookDispatchScenario::Minimal)
         .expect("preparing the minimal hook dispatch workload");
+    let local_registry = HookDispatchWorkload::prepare(HookDispatchScenario::LocalRegistry)
+        .expect("preparing the local-registry hook dispatch workload");
     let mut group = criterion.benchmark_group("hook_dispatch");
 
     // Hook dispatch is subprocess-bound, so use Criterion's minimum sample
@@ -258,9 +368,17 @@ fn benchmark_hook_dispatch(criterion: &mut Criterion) {
     group.sampling_mode(SamplingMode::Flat);
     group.bench_function("pre_tool_use_minimal_config", |bencher| {
         bencher.iter(|| {
-            let output = black_box(&workload)
+            let output = black_box(&minimal)
                 .dispatch()
                 .expect("the timed minimal hook dispatch failed");
+            black_box(output);
+        });
+    });
+    group.bench_function("pre_tool_use_local_registry", |bencher| {
+        bencher.iter(|| {
+            let output = black_box(&local_registry)
+                .dispatch()
+                .expect("the timed local-registry hook dispatch failed");
             black_box(output);
         });
     });
