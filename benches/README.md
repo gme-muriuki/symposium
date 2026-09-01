@@ -16,11 +16,16 @@ Shared support code handles fixtures and sandbox mechanics. Each benchmark targe
 | Target | Cases | Lifecycle |
 | --- | --- | --- |
 | [`workspace_deps`](benchsuite/benches/workspace_deps.rs) | `symposium_cache_miss`, `new_resolver_disk_cache_hit` | Experimental |
+| [`hook_dispatch`](benchsuite/benches/hook_dispatch.rs) | `pre_tool_use_minimal_config` | Experimental |
 
 `workspace_deps` compares dependency resolution with an empty Symposium
 workspace cache against a new resolver reusing a valid disk cache. The miss is
 not a fully cold machine load: Cargo and operating-system caches may already be
 warm. The target's source contains the complete measurement contracts.
+
+`hook_dispatch` measures the in-process `PreToolUse` path in an unchanged
+workspace. Its minimal case disables all plugin registries to establish the
+fixed pipeline and Cargo workspace-lookup floor.
 
 ## Commands
 
@@ -31,9 +36,10 @@ cargo check -p symposium-benchsuite --all-targets
 cargo test -p symposium-benchsuite --lib
 cargo test -p symposium-benchsuite --benches
 cargo bench -p symposium-benchsuite --bench workspace_deps
+cargo bench -p symposium-benchsuite --bench hook_dispatch
 ```
 
-Pass either case name after `--` to run only that case.
+Pass a case name after `--` to run only that case.
 
 ## Benchmark contracts
 

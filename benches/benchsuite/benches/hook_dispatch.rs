@@ -5,11 +5,38 @@
 //! depends on, so
 //! `cargo test -p symposium-benchsuite --bench hook_dispatch` is a correctness
 //! preflight for the dispatch path.
+//!
+//! # `pre_tool_use_minimal_config` contract
+//!
+//! - **Claim:** An unchanged-workspace `PreToolUse` dispatch with no plugin
+//!   sources measures the fixed in-process pipeline and Cargo workspace-lookup
+//!   floor.
+//! - **Workload:** A staged copy of the reference project with default
+//!   auto-sync enabled, both builtin registries disabled, fresh workspace
+//!   state, and a valid `WorkspaceDeps` disk cache.
+//! - **Timed operation:** `execute_hook`, including input parsing, the auto-sync
+//!   freshness decision, builtin dispatch, workspace-cache reuse, empty plugin
+//!   discovery and activation, and output serialization.
+//! - **Excluded setup:** Fixture staging, `Symposium` and Tokio runtime
+//!   construction, configuration parsing, initial cache population,
+//!   workspace-state preparation, and invariant checks.
+//! - **Invariants:** Auto-sync is enabled; no registries or plugins are loaded;
+//!   workspace state and the dependency cache are valid; `cargo metadata` is
+//!   not attempted; and a preflight produces the expected no-op output.
+//! - **Metric:** Wall-clock time per in-process `PreToolUse` dispatch.
+//! - **Noise:** Cargo subprocess startup, filesystem and operating-system
+//!   caches, process scheduling, shared-runner hardware, and developer-level
+//!   Cargo configuration during local runs.
+//! - **Lifecycle:** Experimental.
 
-use std::path::{Path, PathBuf};
+use std::{
+    hint::black_box,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, ensure};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use indoc::indoc;
 use serde_json::{Value, json};
 use tokio::runtime::{Builder, Runtime};
@@ -70,8 +97,13 @@ impl HookDispatchWorkload {
         Ok(workload)
     }
 
-    /// The operation a timed case measures. `symposium` is a parameter so a
-    /// preflight can substitute a guarded Cargo.
+    /// Run the operation measured by the minimal case.
+    fn dispatch(&self) -> Result<Vec<u8>> {
+        self.dispatch_with(&self.symposium)
+    }
+
+    /// Run one dispatch through a supplied context so the preflight can
+    /// substitute a guarded Cargo.
     fn dispatch_with(&self, symposium: &Symposium) -> Result<Vec<u8>> {
         self.runtime.block_on(async {
             hook::execute_hook(
@@ -211,9 +243,28 @@ fn pre_tool_use_payload(project: &Path) -> Result<String> {
     serde_json::to_string(&payload).context("serializing the PreToolUse payload")
 }
 
-fn benchmark_hook_dispatch(_criterion: &mut Criterion) {
-    let _workload = HookDispatchWorkload::prepare_minimal()
+fn benchmark_hook_dispatch(criterion: &mut Criterion) {
+    let workload = HookDispatchWorkload::prepare_minimal()
         .expect("preparing the minimal hook dispatch workload");
+    let mut group = criterion.benchmark_group("hook_dispatch");
+
+    // Hook dispatch is subprocess-bound, so use Criterion's minimum sample
+    // count and collect stability data across runs in the pinned environment.
+    // Flat sampling is explicit because Auto can switch modes as warm-up
+    // latency changes, making otherwise comparable runs use different
+    // statistics and allowing linear sampling to overshoot the time target.
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.sampling_mode(SamplingMode::Flat);
+    group.bench_function("pre_tool_use_minimal_config", |bencher| {
+        bencher.iter(|| {
+            let output = black_box(&workload)
+                .dispatch()
+                .expect("the timed minimal hook dispatch failed");
+            black_box(output);
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(benches, benchmark_hook_dispatch);
