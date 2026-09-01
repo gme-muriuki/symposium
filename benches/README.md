@@ -16,7 +16,7 @@ Shared support code handles fixtures and sandbox mechanics. Each benchmark targe
 | Target | Cases | Lifecycle |
 | --- | --- | --- |
 | [`workspace_deps`](benchsuite/benches/workspace_deps.rs) | `symposium_cache_miss`, `new_resolver_disk_cache_hit` | Experimental |
-| [`hook_dispatch`](benchsuite/benches/hook_dispatch.rs) | `pre_tool_use_minimal_config` | Experimental |
+| [`hook_dispatch`](benchsuite/benches/hook_dispatch.rs) | `pre_tool_use_minimal_config`, `pre_tool_use_local_registry` | Experimental |
 
 `workspace_deps` compares dependency resolution with an empty Symposium
 workspace cache against a new resolver reusing a valid disk cache. The miss is
@@ -25,7 +25,10 @@ warm. The target's source contains the complete measurement contracts.
 
 `hook_dispatch` measures the in-process `PreToolUse` path in an unchanged
 workspace. Its minimal case disables all plugin registries to establish the
-fixed pipeline and Cargo workspace-lookup floor.
+fixed pipeline and Cargo workspace-lookup floor. Its local-registry case adds
+the checked-in three-plugin registry as a representative end-to-end workload.
+The two Cargo workspace lookups currently dominate both cases, so the latter
+is not an isolated measurement of registry or predicate processing.
 
 ## Commands
 
