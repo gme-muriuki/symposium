@@ -6,54 +6,38 @@
 //! `cargo test -p symposium-benchsuite --bench hook_dispatch` is a correctness
 //! preflight for the dispatch path.
 //!
-//! # `pre_tool_use_minimal_config` contract
+//! # Contract
 //!
-//! - **Claim:** An unchanged-workspace `PreToolUse` dispatch with no plugin
-//!   sources measures the fixed in-process pipeline and Cargo workspace-lookup
-//!   floor.
-//! - **Workload:** A staged copy of the reference project with default
-//!   auto-sync enabled, both builtin registries disabled, fresh workspace
-//!   state, and a valid `WorkspaceDeps` disk cache.
-//! - **Timed operation:** `execute_hook`, including input parsing, the auto-sync
-//!   freshness decision, builtin dispatch, workspace-cache reuse, empty plugin
-//!   discovery and activation, and output serialization.
-//! - **Excluded setup:** Fixture staging, `Symposium` and Tokio runtime
-//!   construction, configuration parsing, initial cache population,
-//!   workspace-state preparation, and invariant checks.
-//! - **Invariants:** Auto-sync is enabled; no registries or plugins are loaded;
-//!   workspace state and the dependency cache are valid; `cargo metadata` is
-//!   not attempted; and a preflight produces the expected no-op output.
+//! Both cases share these fields; the table records what each one adds.
+//!
+//! - **Claim:** End-to-end wall-clock latency of the in-process `PreToolUse`
+//!   pipeline in an unchanged Cargo workspace, at its floor and with a
+//!   representative local registry. Neither case isolates registry processing.
+//! - **Workload:** A staged copy of the reference project, plus the three-entry
+//!   local registry for that case, with default auto-sync enabled, both builtin
+//!   registries disabled, fresh workspace state, and a valid `WorkspaceDeps`
+//!   disk cache.
+//! - **Timed operation:** `execute_hook`: input parsing, the auto-sync
+//!   freshness decision, builtin dispatch, workspace-cache reuse, plugin
+//!   activation, and output serialization.
+//! - **Excluded setup:** Everything `HookDispatchWorkload::prepare` does,
+//!   including fixture staging, `Symposium` and Tokio runtime construction,
+//!   cache population, and the invariant checks.
+//! - **Invariants:** Auto-sync is enabled; the loaded registries and plugins are
+//!   exactly those the scenario names; workspace state and the dependency cache
+//!   are valid; `cargo metadata` is not attempted; no external plugin process
+//!   runs; and a preflight produces the expected no-op output.
 //! - **Metric:** Wall-clock time per in-process `PreToolUse` dispatch.
-//! - **Noise:** Cargo subprocess startup, filesystem and operating-system
-//!   caches, process scheduling, shared-runner hardware, and developer-level
-//!   Cargo configuration during local runs.
+//! - **Noise:** Two Cargo workspace-lookup subprocesses dominate both results
+//!   and can mask changes in registry loading and predicate evaluation.
+//!   Filesystem and operating-system caches, process scheduling, shared-runner
+//!   hardware, and developer-level Cargo configuration also vary.
 //! - **Lifecycle:** Experimental.
 //!
-//! # `pre_tool_use_local_registry` contract
-//!
-//! - **Claim:** End-to-end wall-clock latency of an unchanged-workspace
-//!   `PreToolUse` dispatch with a representative local registry and no external
-//!   plugin execution. This is not an isolated measure of registry processing.
-//! - **Workload:** A staged copy of the reference project and three-entry local
-//!   registry with default auto-sync enabled, both builtin registries disabled,
-//!   fresh workspace state, and a valid `WorkspaceDeps` disk cache.
-//! - **Timed operation:** `execute_hook`, including input parsing, the auto-sync
-//!   freshness decision, builtin dispatch, workspace-cache reuse, registry
-//!   loading, plugin activation, hook selection, predicate evaluation, and
-//!   output serialization.
-//! - **Excluded setup:** Fixture staging, `Symposium` and Tokio runtime
-//!   construction, configuration parsing, initial cache population,
-//!   workspace-state preparation, and invariant checks.
-//! - **Invariants:** Auto-sync is enabled; exactly the three fixture plugins are
-//!   loaded; workspace state and the dependency cache are valid; `cargo
-//!   metadata` is not attempted; the predicate sentinel is absent; no external
-//!   plugin process runs; and a preflight produces the expected no-op output.
-//! - **Metric:** Wall-clock time per in-process `PreToolUse` dispatch.
-//! - **Noise:** The two Cargo workspace-lookup subprocesses currently dominate
-//!   the result and can mask changes in registry loading and predicate
-//!   evaluation. Filesystem and operating-system caches, process scheduling,
-//!   shared-runner hardware, and developer-level Cargo configuration also vary.
-//! - **Lifecycle:** Experimental.
+//! | Case | Configuration | Adds to the timed operation |
+//! | --- | --- | --- |
+//! | `pre_tool_use_minimal_config` | no registries | nothing; the pipeline and subprocess floor |
+//! | `pre_tool_use_local_registry` | one path registry, three plugins | registry loading, hook selection, and predicate evaluation, with the sentinel absent so the gated hook never spawns |
 
 use std::{
     hint::black_box,
